@@ -221,7 +221,7 @@
       <div class="field"><label>Admin password</label><input type="password" id="setupPassword" autocomplete="new-password" required minlength="4"></div>
       <button type="submit" class="btn btn-primary btn-block">Create Admin & Continue</button>
     </form>
-    <p class="small muted" style="text-align:center;margin-top:14px;"><a href="javascript:void(0)" onclick="continueAsGuest()">Just want to look around? Continue as Guest →</a></p>
+    <p class="small muted" style="text-align:center;margin-top:14px;" id="guestLinkSetup"><a href="javascript:void(0)" onclick="continueAsGuest()">Just want to look around? Continue as Guest →</a></p>
   </div></div>
 </div>
 
@@ -239,7 +239,7 @@
       <button type="submit" class="btn btn-primary btn-block">Log in</button>
     </form>
     <p class="small muted" style="text-align:center;margin-top:14px;"><a href="javascript:void(0)" onclick="openEmergencyAccessModal()">Locked out? Emergency admin access</a></p>
-    <p class="small muted" style="text-align:center;margin-top:6px;"><a href="javascript:void(0)" onclick="continueAsGuest()">Just want to look around? Continue as Guest →</a></p>
+    <p class="small muted" style="text-align:center;margin-top:6px;" id="guestLinkLogin"><a href="javascript:void(0)" onclick="continueAsGuest()">Just want to look around? Continue as Guest →</a></p>
   </div></div>
 </div>
 
@@ -290,6 +290,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/></svg>
       Equipment
     </div>
+    <div class="nav-item" data-tab="doorcodes" onclick="Nav.go('doorcodes')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><circle cx="12" cy="16" r="1.3"/></svg>
+      Door &amp; Lock Codes
+    </div>
     <div class="nav-item" data-tab="settings" onclick="Nav.go('settings')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
       Settings
@@ -334,6 +338,7 @@
       <section class="tab-panel" id="panel-gallery"></section>
       <section class="tab-panel" id="panel-energy"></section>
       <section class="tab-panel" id="panel-equipment"></section>
+      <section class="tab-panel" id="panel-doorcodes"></section>
       <!-- SETTINGS -->
       <section class="tab-panel" id="panel-settings"></section>
 
@@ -374,7 +379,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 101;
+const APP_REVISION = 104;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -676,6 +681,7 @@ function initApp(){
       banner.classList.remove('hidden');
     }
   }
+  updateGuestLinkVisibility();
   bindCollection('rooms');
   bindCollection('eventTypes');
   bindCollection('taskTemplates');
@@ -691,6 +697,7 @@ function initApp(){
   bindCollection('equipmentItems');
   bindCollection('equipmentLoans');
   bindCollection('maintenanceItems');
+  bindCollection('doorCodes');
   bindCollection('presence');
   setInterval(()=>{ renderTopbarControls(); if(Nav.current==='dashboard') renderDashboard(); }, 30000);
   db.ref('config').on('value', snap=>{ State.config = snap.val() || {}; injectLogos(); if(Nav.current) Nav.render(Nav.current); });
@@ -757,13 +764,22 @@ function enterApp(){
 }
 
 // Lets someone (e.g. a manager JP wants to show the app to) look around without creating
-// a real account. Nothing is written to the database and nothing persists across a
-// refresh — closing/reopening lands back on this same choice. Full admin-level view since
-// there's no real data or Firebase connection at stake until one is actually set up.
+// a real account. Full admin-level view, on local demo data, with no password needed — safe
+// only because there's no real Firebase connection to write into. Once a real connection is
+// live, the link is hidden (see updateGuestLinkVisibility) so a passwordless "Guest" can never
+// get a working admin session on top of real bookings/data — this guard is a backstop in case
+// it's ever called some other way.
 function continueAsGuest(){
+  if(USING_REAL_FIREBASE){ toast('Guest preview is only available before a real Firebase connection is set up — ask an Admin for a login instead.', true); return; }
   Session.username = 'Guest'; Session.role = 'admin'; Session.uid = null; Session.isGuest = true;
   enterApp();
   toast("Browsing as Guest — full preview, nothing here is a real saved account.");
+}
+// Hides the "Continue as Guest" links once a real Firebase connection is up — see continueAsGuest().
+function updateGuestLinkVisibility(){
+  const show = !USING_REAL_FIREBASE;
+  const a = document.getElementById('guestLinkSetup'); if(a) a.style.display = show ? '' : 'none';
+  const b = document.getElementById('guestLinkLogin'); if(b) b.style.display = show ? '' : 'none';
 }
 
 // ---------------------------------------------------------------------
@@ -878,7 +894,7 @@ document.getElementById('loginForm').addEventListener('submit', async e=>{
 // ---------------------------------------------------------------------
 // 5. NAV
 // ---------------------------------------------------------------------
-const TAB_TITLES = { dashboard:'Dashboard', bookings:'Bookings', groups:'Groups & Members', finance:'Payments & Expenses', setup:'Setup', history:'History', rota:'Rota', gallery:'Gallery', energy:'Energy', equipment:'Equipment', settings:'Settings' };
+const TAB_TITLES = { dashboard:'Dashboard', bookings:'Bookings', groups:'Groups & Members', finance:'Payments & Expenses', setup:'Setup', history:'History', rota:'Rota', gallery:'Gallery', energy:'Energy', equipment:'Equipment', doorcodes:'Door & Lock Codes', settings:'Settings' };
 const Nav = {
   current: null,
   go(tab){
@@ -902,6 +918,7 @@ const Nav = {
     else if(tab==='gallery') renderGallery();
     else if(tab==='energy') renderEnergy();
     else if(tab==='equipment') renderEquipment();
+    else if(tab==='doorcodes') renderDoorCodes();
     else if(tab==='settings') renderSettings();
   }
 };
@@ -1342,7 +1359,7 @@ function openBookingModal(id){
   const equipRowsHtml = equipmentItems.map(it=>{
     const existingQty = (b && b.equipmentSelections && b.equipmentSelections[it.id]) || 0;
     return `<div class="equip-row" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--gray-100);">
-      ${it.imageDataUrl?`<img src="${it.imageDataUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0;">`:'<div style="width:36px;height:36px;border-radius:6px;background:var(--gray-100);flex-shrink:0;"></div>'}
+      ${it.imageDataUrl?`<img src="${it.imageDataUrl}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;flex-shrink:0;">`:'<div style="width:56px;height:56px;border-radius:8px;background:var(--gray-100);flex-shrink:0;"></div>'}
       <div style="flex:1;min-width:0;">
         <div style="font-size:12.5px;font-weight:600;">${escapeHtml(it.name)}</div>
         ${it.hireRate?`<div class="small muted">${euro(it.hireRate)} each</div>`:''}
@@ -1356,7 +1373,7 @@ function openBookingModal(id){
       <div class="field">
         <label>Room</label>
         <select id="fRoom" ${b?.isWholeComplex?'disabled':''} onchange="updateRoomPreview();updateBookingCostEstimate();">${opt(rooms, b?.roomId, r=>r.name)}</select>
-        <img id="fRoomPreview" style="width:100%;max-height:110px;object-fit:cover;border-radius:8px;margin-top:6px;display:none;">
+        <img id="fRoomPreview" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;margin-top:6px;display:none;">
         <label class="small" style="display:flex;align-items:center;gap:5px;margin-top:6px;"><input type="checkbox" id="fWholeComplex" ${b?.isWholeComplex?'checked':''} onchange="document.getElementById('fRoom').disabled=this.checked;updateRoomPreview();updateBookingCostEstimate();"> Book the whole complex (all rooms)</label>
       </div>
       <div class="field"><label>Group / Booked by</label><select id="fGroup" onchange="handleGroupSelectChange(this)">${opt(groups, b?.groupId, g=>g.name)}<option value="__new__">+ Add new group…</option></select></div>
@@ -1530,6 +1547,11 @@ async function deleteBooking(id){
 // ---------------------------------------------------------------------
 // 7c. GROUPS & MEMBERS
 // ---------------------------------------------------------------------
+function memberAvatarHtml(m){
+  if(m.imageDataUrl) return `<img src="${m.imageDataUrl}" style="width:32px;height:32px;object-fit:cover;border-radius:50%;flex-shrink:0;">`;
+  const initials = (m.name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
+  return `<div style="width:32px;height:32px;border-radius:50%;background:var(--gray-100);color:var(--gray-700);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;">${escapeHtml(initials)}</div>`;
+}
 function renderGroups(){
   const canDelete = Session.role==='admin';
   const groups = list('groups').sort((a,b)=>a.name.localeCompare(b.name));
@@ -1549,7 +1571,7 @@ function renderGroups(){
         <div class="card-title">Committee &amp; Members <button class="btn btn-primary btn-sm" onclick="openMemberModal()">+ Add Member</button></div>
         <div class="table-wrap"><table><thead><tr><th>Name</th><th>Phone</th><th>Role</th><th>Active</th><th></th></tr></thead><tbody>
           ${members.length?members.map(m=>`<tr>
-            <td>${escapeHtml(m.name)}</td><td>${escapeHtml(m.phone||'')}</td><td>${escapeHtml(m.role||'Member')}</td><td>${m.active===false?'<span class="pill pill-gray">No</span>':'<span class="pill pill-green">Yes</span>'}</td>
+            <td><div style="display:flex;align-items:center;gap:8px;">${memberAvatarHtml(m)}<span>${escapeHtml(m.name)}</span></div></td><td>${escapeHtml(m.phone||'')}</td><td>${escapeHtml(m.role||'Member')}</td><td>${m.active===false?'<span class="pill pill-gray">No</span>':'<span class="pill pill-green">Yes</span>'}</td>
             <td style="white-space:nowrap;"><button class="icon-btn" onclick="openMemberModal('${m.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('members','${m.id}','member')">🗑</button>`:''}</td>
           </tr>`).join(''):'<tr class="empty-row"><td colspan="5">No members yet</td></tr>'}
         </tbody></table></div>
@@ -1608,12 +1630,14 @@ async function handleGroupSelectChange(selectEl){
 
 function openMemberModal(id){
   const m = id?get('members',id):null;
+  _pendingItemImageDataUrl = null;
   Modal.open(id?'Edit Member':'Add Member', `
     <div class="field"><label>Name</label><input type="text" id="mName" value="${escapeHtml(m?.name||'')}"></div>
     <div class="field-row">
       <div class="field"><label>Phone</label><input type="text" id="mPhone" value="${escapeHtml(m?.phone||'')}"></div>
       <div class="field"><label>Role</label><select id="mRole">${['Member','Chairman','Vice Chairman','Treasurer','Secretary'].map(r=>`<option ${m?.role===r?'selected':''}>${r}</option>`).join('')}</select></div>
     </div>
+    ${itemImageFieldHtml(m?.imageDataUrl, 'mImagePreview')}
     <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="mActive" ${m?.active===false?'':'checked'}> Active</label></div>
   `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveMember('${id||''}')">Save</button>`);
 }
@@ -1621,6 +1645,7 @@ async function saveMember(id){
   const name = document.getElementById('mName').value.trim();
   if(!name){ toast('Member name required', true); return; }
   const data = { name, phone:document.getElementById('mPhone').value, role:document.getElementById('mRole').value, active:document.getElementById('mActive').checked };
+  if(_pendingItemImageDataUrl) data.imageDataUrl = _pendingItemImageDataUrl;
   if(id) await db.ref('members/'+id).update(data); else await db.ref('members').push(data);
   await logActivity(id?'Edited member':'Added member', name);
   Modal.close(); toast('Member saved');
@@ -1759,7 +1784,7 @@ function renderSetup(){
       <div class="card-title">Rooms <button class="btn btn-primary btn-sm" onclick="openRoomModal()">+ Add Room</button></div>
       <div class="table-wrap"><table><thead><tr><th></th><th>Name</th><th>Capacity</th><th>Hire rate</th><th>Amenities</th><th></th></tr></thead><tbody>
         ${rooms.length?rooms.map(r=>`<tr>
-          <td>${r.imageDataUrl?`<img src="${r.imageDataUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;">`:'<span class="muted small">—</span>'}</td>
+          <td>${r.imageDataUrl?`<img src="${r.imageDataUrl}" style="width:88px;height:88px;object-fit:cover;border-radius:8px;">`:'<span class="muted small">—</span>'}</td>
           <td>${escapeHtml(r.name)}</td><td>${r.capacity||0}</td><td>${r.hireRate?euro(r.hireRate):'<span class="muted small">—</span>'}</td>
           <td>${AMENITY_FIELDS.filter(([k])=>r[k]).map(([,label])=>`<span class="pill pill-green" style="margin:1px;">${label}</span>`).join('')||'<span class="muted small">none</span>'}</td>
           <td style="white-space:nowrap;"><button class="icon-btn" onclick="openRoomModal('${r.id}')">✎</button><button class="icon-btn danger" onclick="deleteRecord('rooms','${r.id}','room')">🗑</button></td>
@@ -1800,7 +1825,7 @@ async function handleItemImageFile(input, previewId){
 function itemImageFieldHtml(existingUrl, previewId){
   return `<div class="field"><label>Photo (optional)</label>
     <div style="display:flex;align-items:center;gap:12px;">
-      <img id="${previewId}" src="${existingUrl||''}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;background:var(--gray-100);${existingUrl?'':'display:none;'}" onerror="this.style.display='none'">
+      <img id="${previewId}" src="${existingUrl||''}" style="width:96px;height:96px;object-fit:cover;border-radius:8px;background:var(--gray-100);${existingUrl?'':'display:none;'}" onerror="this.style.display='none'">
       <input type="file" accept="image/*" onchange="handleItemImageFile(this,'${previewId}')">
     </div>
   </div>`;
@@ -2065,11 +2090,48 @@ function addRotaSlotRowUI(){
   const members = list('members').sort((a,b)=>a.name.localeCompare(b.name));
   document.getElementById('rotaSlots').insertAdjacentHTML('beforeend', rotaSlotRowHtml(members, []));
 }
+let _rotaBuildOrder = [];
+function renderRotaBuildOrderChips(){
+  const wrap = document.getElementById('rtBuildOrderChips');
+  if(!wrap) return;
+  if(!_rotaBuildOrder.length){
+    wrap.innerHTML = '<span class="small muted">Tick people below, in the order you want them paired — the 1st and 2nd you tick become the first pair, 3rd and 4th the next, and so on.</span>';
+    return;
+  }
+  wrap.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px;">${_rotaBuildOrder.map((id,idx)=>{
+    const m = get('members', id);
+    if(!m) return '';
+    return `<span style="background:var(--gray-100);color:var(--gray-700);display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:12px;font-weight:600;">${idx+1}. ${escapeHtml(m.name)} <button type="button" onclick="removeRotaBuildMember('${m.id}')" style="border:none;background:none;cursor:pointer;color:var(--gray-500);font-weight:700;line-height:1;padding:0;">×</button></span>`;
+  }).join('')}</div>`;
+}
+function toggleRotaBuildMember(id, checked){
+  if(checked){ if(!_rotaBuildOrder.includes(id)) _rotaBuildOrder.push(id); }
+  else { _rotaBuildOrder = _rotaBuildOrder.filter(x=>x!==id); }
+  renderRotaBuildOrderChips();
+}
+function removeRotaBuildMember(id){
+  _rotaBuildOrder = _rotaBuildOrder.filter(x=>x!==id);
+  const chk = document.getElementById('rtBuildChk_'+id);
+  if(chk) chk.checked = false;
+  renderRotaBuildOrderChips();
+}
+function buildRotaSlotsFromOrder(){
+  if(!_rotaBuildOrder.length){ toast('Tick at least one person first', true); return; }
+  const perTurn = Math.max(1, parseInt(document.getElementById('rtPeoplePerTurn').value, 10) || 2);
+  const members = list('members').sort((a,b)=>a.name.localeCompare(b.name));
+  const chunks = [];
+  for(let i=0;i<_rotaBuildOrder.length;i+=perTurn){ chunks.push(_rotaBuildOrder.slice(i, i+perTurn)); }
+  document.getElementById('rotaSlots').innerHTML = chunks.map(c=>rotaSlotRowHtml(members, c)).join('');
+  toast(`Built ${chunks.length} rotation slot${chunks.length===1?'':'s'} from ${_rotaBuildOrder.length} people`);
+}
 function openRotaEditorModal(id){
   const r = id ? get('rotas', id) : null;
   const members = list('members').sort((a,b)=>a.name.localeCompare(b.name));
   const groups = list('groups').sort((a,b)=>a.name.localeCompare(b.name));
   const slotsHtml = (r && r.slots && r.slots.length ? r.slots : [[]]).map(slot=>rotaSlotRowHtml(members, slot)).join('');
+  _rotaBuildOrder = (r && r.slots && r.slots.length) ? [].concat(...r.slots) : [];
+  const defaultPerTurn = (r && r.slots && r.slots.length && r.slots[0].length) ? r.slots[0].length : 2;
+  const buildChecklistHtml = members.length ? members.map(m=>`<label class="small" style="display:flex;align-items:center;gap:4px;background:var(--gray-100);padding:3px 9px;border-radius:20px;cursor:pointer;"><input type="checkbox" id="rtBuildChk_${m.id}" value="${m.id}" ${_rotaBuildOrder.includes(m.id)?'checked':''} onchange="toggleRotaBuildMember('${m.id}', this.checked)"> ${escapeHtml(m.name)}</label>`).join('') : '<span class="muted small">Add members in Groups &amp; Members first</span>';
   Modal.open(id?'Edit Rota':'New Rota', `
     <div class="field"><label>Rota name</label><input type="text" id="rtName" placeholder="e.g. Monday Night Cards — Tea Making" value="${escapeHtml(r?.name||'')}"></div>
     <div class="field-row">
@@ -2077,17 +2139,29 @@ function openRotaEditorModal(id){
       <div class="field"><label>Frequency</label><select id="rtFrequency">${['Weekly','Fortnightly','Monthly'].map(f=>`<option ${r?.frequency===f?'selected':''}>${f}</option>`).join('')}</select></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Start date</label><input type="date" id="rtStart" value="${r?.startDate||todayIso()}"><div class="small muted" style="margin-top:3px;">Sets the weekday it runs on — e.g. pick any Monday and it repeats every Monday from then on.</div></div>
+      <div class="field"><label>Start date</label><input type="date" id="rtStart" value="${r?.startDate||todayIso()}"><div class="small muted" style="margin-top:3px;">Sets the weekday it runs on — e.g. pick any Monday and it repeats every Monday from then on. Recurs indefinitely unless you set an end date below.</div></div>
       <div class="field"><label>Time (be there at)</label><input type="time" id="rtTime" value="${r?.time||'21:00'}"></div>
     </div>
     <div class="field"><label>End date (optional — leave blank to run indefinitely)</label><input type="date" id="rtEnd" value="${r?.endDate||''}"></div>
     <div class="field"><label>Notes</label><input type="text" id="rtNotes" value="${escapeHtml(r?.notes||'')}"></div>
     <hr class="divider">
     <div class="field">
-      <div class="flex-between" style="margin-bottom:6px;"><label style="margin:0;">Rotation order (add pairs, trios, or single people — they rotate in this order)</label><button type="button" class="btn btn-secondary btn-sm" onclick="addRotaSlotRowUI()">+ Add Slot</button></div>
+      <label style="margin-bottom:2px;display:block;">Quick build — tick who's in this rota, in pairing order</label>
+      <p class="small muted" style="margin:0 0 8px;">Tick everyone doing this rota, in the order you want them paired up. Set how many people are on together, hit Build, and it lays out the whole rotation for you.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">${buildChecklistHtml}</div>
+      <div id="rtBuildOrderChips" style="margin-bottom:10px;"></div>
+      <div class="field-row" style="align-items:flex-end;">
+        <div class="field" style="max-width:160px;"><label>People per turn</label><input type="number" id="rtPeoplePerTurn" min="1" value="${defaultPerTurn}"></div>
+        <button type="button" class="btn btn-secondary" onclick="buildRotaSlotsFromOrder()">Build Rotation From List Above</button>
+      </div>
+    </div>
+    <hr class="divider">
+    <div class="field">
+      <div class="flex-between" style="margin-bottom:6px;"><label style="margin:0;">Rotation order (built for you above — or add/adjust slots by hand here)</label><button type="button" class="btn btn-secondary btn-sm" onclick="addRotaSlotRowUI()">+ Add Slot</button></div>
       <div id="rotaSlots">${slotsHtml}</div>
     </div>
   `, `<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveRotaForm('${id||''}')">Save Rota</button>`, true);
+  renderRotaBuildOrderChips();
 }
 async function saveRotaForm(id){
   const name = document.getElementById('rtName').value.trim();
@@ -2379,7 +2453,7 @@ function renderInventoryLoans(){
       <p class="section-desc" style="margin-top:-10px;">Add a "Tea Making Service" or similar item here too — anything with a hire rate shows up as an option on the booking form.</p>
       <div class="table-wrap"><table><thead><tr><th></th><th>Item</th><th>Hire rate</th><th>Total qty</th><th>On loan</th><th>Available</th><th>Notes</th><th></th></tr></thead><tbody>
         ${items.length?items.map(it=>{ const onLoan=loanedQtyFor(it.id); return `<tr>
-          <td>${it.imageDataUrl?`<img src="${it.imageDataUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;">`:'<span class="muted small">—</span>'}</td>
+          <td>${it.imageDataUrl?`<img src="${it.imageDataUrl}" style="width:88px;height:88px;object-fit:cover;border-radius:8px;">`:'<span class="muted small">—</span>'}</td>
           <td>${escapeHtml(it.name)}</td><td>${it.hireRate?euro(it.hireRate):'<span class="muted small">—</span>'}</td><td>${it.totalQuantity||0}</td><td>${onLoan}</td><td>${(it.totalQuantity||0)-onLoan}</td><td class="small muted">${escapeHtml(it.notes||'')}</td>
           <td style="white-space:nowrap;"><button class="icon-btn" onclick="openEquipmentItemModal('${it.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('equipmentItems','${it.id}','item')">🗑</button>`:''}</td>
         </tr>`; }).join(''):'<tr class="empty-row"><td colspan="8">No equipment items yet — add chairs, tables, boiler, cups, plates, etc.</td></tr>'}
@@ -2541,6 +2615,43 @@ async function markMaintenanceDone(id){
 }
 
 // ---------------------------------------------------------------------
+// 7i5. DOOR & LOCK CODES — a simple shared list of door/lock box/alarm codes
+// ---------------------------------------------------------------------
+function renderDoorCodes(){
+  const canDelete = Session.role==='admin';
+  const codes = list('doorCodes').sort((a,b)=>a.label.localeCompare(b.label));
+  document.getElementById('panel-doorcodes').innerHTML = `
+    <div class="card">
+      <div class="toolbar"><h3 class="section-title" style="margin:0;">Door &amp; Lock Codes</h3><button class="btn btn-primary" onclick="openDoorCodeModal()">+ Add Code</button></div>
+      <p class="section-desc" style="margin-top:-10px;">Front door, lock box, side gate, alarm — anything with its own code or combination. Visible to anyone logged in (Admin or Staff), same as the rest of the app.</p>
+      <div class="table-wrap"><table><thead><tr><th>Where</th><th>Code</th><th>Notes</th><th></th></tr></thead><tbody>
+        ${codes.length?codes.map(c=>`<tr>
+          <td>${escapeHtml(c.label)}</td><td><strong style="font-family:monospace;font-size:15px;letter-spacing:1px;">${escapeHtml(c.code)}</strong></td><td class="small muted">${escapeHtml(c.notes||'')}</td>
+          <td style="white-space:nowrap;"><button class="icon-btn" onclick="openDoorCodeModal('${c.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('doorCodes','${c.id}','code')">🗑</button>`:''}</td>
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="4">No codes saved yet — add the front door, lock box, alarm, whatever you need on hand.</td></tr>'}
+      </tbody></table></div>
+    </div>
+  `;
+}
+function openDoorCodeModal(id){
+  const c = id?get('doorCodes',id):null;
+  Modal.open(id?'Edit Code':'Add Code', `
+    <div class="field"><label>Where (e.g. Front Door, Lock Box, Side Gate, Alarm)</label><input type="text" id="dcLabel" value="${escapeHtml(c?.label||'')}"></div>
+    <div class="field"><label>Code</label><input type="text" id="dcCode" value="${escapeHtml(c?.code||'')}"></div>
+    <div class="field"><label>Notes</label><textarea id="dcNotes" rows="2" placeholder="e.g. change after each key holder change">${escapeHtml(c?.notes||'')}</textarea></div>
+  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveDoorCode('${id||''}')">Save</button>`);
+}
+async function saveDoorCode(id){
+  const label = document.getElementById('dcLabel').value.trim();
+  const code = document.getElementById('dcCode').value.trim();
+  if(!label || !code){ toast('Both "Where" and "Code" are required', true); return; }
+  const data = { label, code, notes: document.getElementById('dcNotes').value };
+  if(id) await db.ref('doorCodes/'+id).update(data); else await db.ref('doorCodes').push(data);
+  await logActivity(id?'Edited door/lock code':'Added door/lock code', label);
+  Modal.close(); toast('Code saved');
+}
+
+// ---------------------------------------------------------------------
 // 7g. SETTINGS
 // ---------------------------------------------------------------------
 let _pendingLogoDataUrl = null;
@@ -2625,6 +2736,10 @@ function renderSettings(){
       <div class="card">
         <div class="card-title">Hall Configuration</div>
         <div class="field"><label>Hall / centre name</label><input type="text" id="cfgHallName" value="${escapeHtml(State.config.hallName||'')}"></div>
+        <div class="field-row">
+          <div class="field"><label>Contact email (shown on the Dashboard)</label><input type="email" id="cfgHallEmail" placeholder="e.g. mullaghcommunitycentre@gmail.com" value="${escapeHtml(State.config.hallEmail||'')}"></div>
+          <div class="field"><label>Eircode (shown on the Dashboard)</label><input type="text" id="cfgHallEircode" placeholder="e.g. H14 X2C1" value="${escapeHtml(State.config.hallEircode||'')}"></div>
+        </div>
         <div class="field"><label>Logo</label>
           <div style="display:flex;align-items:center;gap:12px;">
             <img class="logo-preview" id="logoPreview" src="${_pendingLogoDataUrl || State.config.logoDataUrl || ''}" onerror="this.style.visibility='hidden'">
@@ -2715,7 +2830,7 @@ function handleLogoFile(input){
   reader.readAsDataURL(file);
 }
 async function saveHallConfig(){
-  const data = { hallName: document.getElementById('cfgHallName').value.trim() || 'Community Centre' };
+  const data = { hallName: document.getElementById('cfgHallName').value.trim() || 'Community Centre', hallEmail: document.getElementById('cfgHallEmail').value.trim(), hallEircode: document.getElementById('cfgHallEircode').value.trim() };
   if(_pendingLogoDataUrl) data.logoDataUrl = _pendingLogoDataUrl;
   await db.ref('config').update(data);
   await logActivity('Updated hall settings');
@@ -2797,7 +2912,7 @@ async function deleteUserAccount(id, username){
 function downloadBackup(){
   // Everything except `users` (login credentials never leave the app this way) and
   // `presence` (just live who's-online data, meaningless in a backup).
-  const data = { rooms:State.rooms, eventTypes:State.eventTypes, taskTemplates:State.taskTemplates, groups:State.groups, members:State.members, bookings:State.bookings, payments:State.payments, expenses:State.expenses, activityLog:State.activityLog, gallery:State.gallery, rotas:State.rotas, energyReadings:State.energyReadings, equipmentItems:State.equipmentItems, equipmentLoans:State.equipmentLoans, maintenanceItems:State.maintenanceItems, config:State.config, exportedAt: nowStamp() };
+  const data = { rooms:State.rooms, eventTypes:State.eventTypes, taskTemplates:State.taskTemplates, groups:State.groups, members:State.members, bookings:State.bookings, payments:State.payments, expenses:State.expenses, activityLog:State.activityLog, gallery:State.gallery, rotas:State.rotas, energyReadings:State.energyReadings, equipmentItems:State.equipmentItems, equipmentLoans:State.equipmentLoans, maintenanceItems:State.maintenanceItems, doorCodes:State.doorCodes, config:State.config, exportedAt: nowStamp() };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -2879,7 +2994,7 @@ function triggerRestoreFilePicker(){
   if(Session.role!=='admin'){ toast('Only an Admin can restore a backup', true); return; }
   document.getElementById('restoreFileInput').click();
 }
-const RESTORABLE_BACKUP_KEYS = ['rooms','eventTypes','taskTemplates','groups','members','bookings','payments','expenses','activityLog','gallery','rotas','energyReadings','equipmentItems','equipmentLoans','maintenanceItems','config'];
+const RESTORABLE_BACKUP_KEYS = ['rooms','eventTypes','taskTemplates','groups','members','bookings','payments','expenses','activityLog','gallery','rotas','energyReadings','equipmentItems','equipmentLoans','maintenanceItems','doorCodes','config'];
 async function handleRestoreFile(input){
   const file = input.files[0];
   input.value = ''; // so picking the same file again still fires a change event
@@ -2939,7 +3054,7 @@ function renderDashboard(){
     <div class="welcome-banner">
       <div class="strip">${brandStripHtml()}</div>
       <div class="overlay">
-        <div><h2>${escapeHtml((State.config&&State.config.hallName)||'Community Centre')}</h2><p>Welcome back, ${escapeHtml(Session.username)} · ${displayDate(today)} · ${revisionLineHtml()}</p></div>
+        <div><h2>${escapeHtml((State.config&&State.config.hallName)||'Community Centre')}</h2><p>Welcome back, ${escapeHtml(Session.username)} · ${displayDate(today)} · ${revisionLineHtml()}${(State.config&&State.config.hallEmail)?` · ✉ ${escapeHtml(State.config.hallEmail)}`:''}${(State.config&&State.config.hallEircode)?` · 📍 ${escapeHtml(State.config.hallEircode)}`:''}</p></div>
       </div>
     </div>
     ${(overdueMaintenance.length || overdueLoans.length) ? `

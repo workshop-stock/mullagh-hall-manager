@@ -393,7 +393,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 111;
+const APP_REVISION = 112;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -857,7 +857,7 @@ function openEmergencyAccessModal(){
     <div class="field"><label>New password</label><input type="password" id="eaPassword" minlength="4" autocomplete="new-password"></div>
     <div class="field"><label>Admin promotion key</label><input type="password" id="eaKey"></div>
     <div class="auth-error" id="eaError" style="display:none;"></div>
-  `, `<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="submitEmergencyAccess()">Get Me In</button>`);
+  `, `<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="submitEmergencyAccess()">Get Me In</button>`);
 }
 async function submitEmergencyAccess(){
   const err = document.getElementById('eaError'); err.style.display='none';
@@ -945,17 +945,42 @@ const Nav = {
 // 6. MODAL
 // ---------------------------------------------------------------------
 const Modal = {
+  _snapshot: null,
+  _pendingImageAtOpen: undefined,
   open(title, bodyHtml, footerHtml, wide){
     document.getElementById('modalRoot').innerHTML = `
-      <div class="modal-backdrop" onclick="if(event.target===this) Modal.close()">
+      <div class="modal-backdrop" onclick="if(event.target===this) Modal.requestClose()">
         <div class="modal ${wide?'modal-wide':''}">
-          <div class="modal-header"><h3>${escapeHtml(title)}</h3><button class="close-x" onclick="Modal.close()">&times;</button></div>
+          <div class="modal-header"><h3>${escapeHtml(title)}</h3><button class="close-x" onclick="Modal.requestClose()">&times;</button></div>
           <div class="modal-body">${bodyHtml}</div>
           <div class="modal-footer">${footerHtml||''}</div>
         </div>
       </div>`;
+    // Snapshot the form's starting values so we can tell later whether anything was actually
+    // changed — used to warn before throwing away unsaved work on Cancel/×/click-outside.
+    this._snapshot = this._captureFieldValues();
+    this._pendingImageAtOpen = (typeof _pendingItemImageDataUrl !== 'undefined') ? _pendingItemImageDataUrl : undefined;
   },
-  close(){ document.getElementById('modalRoot').innerHTML=''; }
+  _captureFieldValues(){
+    const els = document.querySelectorAll('.modal-body input, .modal-body select, .modal-body textarea');
+    return Array.from(els).map(el => (el.type==='checkbox'||el.type==='radio') ? el.checked : el.value);
+  },
+  isDirty(){
+    if(!this._snapshot) return false;
+    const now = this._captureFieldValues();
+    if(now.length === this._snapshot.length){
+      for(let i=0;i<now.length;i++){ if(now[i] !== this._snapshot[i]) return true; }
+    }
+    if(typeof _pendingItemImageDataUrl !== 'undefined' && _pendingItemImageDataUrl !== this._pendingImageAtOpen) return true;
+    return false;
+  },
+  // Use this for anything the user might trigger by mistake (×, click-outside, Cancel/Close) —
+  // it only interrupts them with a confirm if there's actually unsaved input to lose.
+  requestClose(){
+    if(this.isDirty() && !confirm("Discard what you've entered on this screen?")) return;
+    this.close();
+  },
+  close(){ document.getElementById('modalRoot').innerHTML=''; this._snapshot = null; }
 };
 
 // ---------------------------------------------------------------------
@@ -1220,7 +1245,7 @@ function openNotifyModal(id){
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
       <button class="btn btn-secondary btn-sm" onclick="Notify.notifyHallGroup(document.getElementById('notifyAlertText').value)">Send to Hall Group</button>
     </div>
-  `, `<button class="btn btn-secondary" onclick="Modal.close()">Close</button>`, true);
+  `, `<button class="btn btn-secondary" onclick="Modal.requestClose()">Close</button>`, true);
 }
 async function autoSendConfirmNow(id){
   const b = get('bookings', id); const group = get('groups', b.groupId);
@@ -1241,7 +1266,7 @@ function openRotaModal(id){
       <button class="btn btn-secondary btn-sm" onclick="Notify.openWhatsApp('${group?.contactPhone||''}', document.getElementById('rotaText').value)" ${group?.contactPhone?'':'disabled title="No phone on this group"'}>Send to Group Contact</button>
       <button class="btn btn-secondary btn-sm" onclick="Notify.openMailto('${group?.contactEmail||''}', 'Rota reminder', document.getElementById('rotaText').value)" ${group?.contactEmail?'':'disabled title="No email on this group"'}>Send via Email</button>
     </div>
-  `, `<button class="btn btn-secondary" onclick="Modal.close()">Close</button>`, true);
+  `, `<button class="btn btn-secondary" onclick="Modal.requestClose()">Close</button>`, true);
 }
 
 // ---------------------------------------------------------------------
@@ -1435,7 +1460,7 @@ function openBookingModal(id){
     <div class="field"><label>Notes</label><textarea id="fNotes" rows="2">${escapeHtml(b?.notes||'')}</textarea></div>
     <div class="field"><label>Tasks for this booking</label><div id="fTasks">${taskRowsHtml}</div></div>
   `, `
-    <button class="btn btn-secondary" onclick="Modal.close()">Cancel</button>
+    <button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button>
     <button class="btn btn-primary" onclick="saveBookingForm('${id||''}')">Save Booking</button>
   `, true);
 
@@ -1636,7 +1661,7 @@ function openGroupModal(id){
     <div class="field"><label>Contact email</label><input type="email" id="gEmail" value="${escapeHtml(g?.contactEmail||'')}"></div>
     <div class="field"><label>Group type</label><input type="text" id="gType" placeholder="e.g. Sports, Community, Farming, Music" value="${escapeHtml(g?.groupType||'')}"></div>
     <div class="field"><label>Notes</label><textarea id="gNotes" rows="2">${escapeHtml(g?.notes||'')}</textarea></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveGroup('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveGroup('${id||''}')">Save</button>`);
 }
 async function saveGroup(id){
   const name = document.getElementById('gName').value.trim();
@@ -1675,7 +1700,7 @@ function openMemberModal(id){
     </div>
     ${itemImageFieldHtml(m?.imageDataUrl, 'mImagePreview')}
     <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="mActive" ${m?.active===false?'':'checked'}> Active</label></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveMember('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveMember('${id||''}')">Save</button>`);
 }
 async function saveMember(id){
   const name = document.getElementById('mName').value.trim();
@@ -1807,7 +1832,7 @@ function openPaymentModal(id){
       <textarea id="pLodgeNote" rows="2" placeholder="e.g. cash still with treasurer, going to the bank Friday">${escapeHtml(p?.lodgementNote||'')}</textarea>
     </div>
     <div class="field"><label>Notes</label><textarea id="pNotes" rows="2">${escapeHtml(p?.notes||'')}</textarea></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="savePayment('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="savePayment('${id||''}')">Save</button>`);
 }
 async function savePayment(id){
   const bookingId = document.getElementById('pBooking').value;
@@ -1843,7 +1868,7 @@ function openExpenseModal(id){
     <div class="field"><label>Description</label><input type="text" id="eDesc" value="${escapeHtml(e?.description||'')}"></div>
     <div class="field"><label>Category</label><select id="eCategory">${['Electricity','Gas','Insurance','Maintenance','Supplies','Cleaning','Other'].map(c=>`<option ${e?.category===c?'selected':''}>${c}</option>`).join('')}</select></div>
     <div class="field"><label>Linked event/booking (optional — lets you see cost vs profit for that event in Reports)</label><select id="eBooking"><option value="">— not linked to a specific event —</option>${bookings.map(b=>`<option value="${b.id}" ${e?.bookingId===b.id?'selected':''}>${escapeHtml(bookingLabel(b))} — ${displayDate(b.bookingDate)}</option>`).join('')}</select></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveExpense('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveExpense('${id||''}')">Save</button>`);
 }
 async function saveExpense(id){
   const amount = Number(document.getElementById('eAmount').value);
@@ -1960,7 +1985,7 @@ function openRoomModal(id){
       </div>
     </div>
     <div class="field"><label>Notes</label><textarea id="rNotes" rows="2">${escapeHtml(r?.notes||'')}</textarea></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveRoom('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveRoom('${id||''}')">Save</button>`);
 }
 async function saveRoom(id){
   const name = document.getElementById('rName').value.trim();
@@ -2044,7 +2069,7 @@ function openEventTypeModal(id){
     </div>
     <p class="small muted" style="margin-top:-8px;">Use "Free / No Charge" for community events, fundraisers or charity cake sales where the hall doesn't charge the group a room fee. Use "${PER_CATEGORY_METHOD}" for something like a Spooky Walk or a Santa visit, where adults, children, senior citizens or whole families each pay a different amount.</p>
     <div class="field"><label>Notes</label><textarea id="etNotes" rows="2">${escapeHtml(e?.notes||'')}</textarea></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveEventType('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveEventType('${id||''}')">Save</button>`);
 }
 function handleEventTypeMethodChange(){
   const method = document.getElementById('etMethod').value;
@@ -2076,7 +2101,7 @@ function openTaskTemplateModal(id){
     <div class="field"><label>Task name</label><input type="text" id="ttName" value="${escapeHtml(t?.name||'')}"></div>
     <div class="field"><label>Description</label><input type="text" id="ttDesc" value="${escapeHtml(t?.description||'')}"></div>
     <div class="field"><label>Hours before event (negative = hours after)</label><input type="number" id="ttHours" value="${t?.defaultHoursBefore ?? 1}"></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveTaskTemplate('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveTaskTemplate('${id||''}')">Save</button>`);
 }
 async function saveTaskTemplate(id){
   const name = document.getElementById('ttName').value.trim();
@@ -2398,7 +2423,7 @@ function openRotaEditorModal(id){
       <div class="flex-between" style="margin-bottom:6px;"><label style="margin:0;">Rotation order (built for you above — or add/adjust slots by hand here)</label><button type="button" class="btn btn-secondary btn-sm" onclick="addRotaSlotRowUI()">+ Add Slot</button></div>
       <div id="rotaSlots">${slotsHtml}</div>
     </div>
-  `, `<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveRotaForm('${id||''}')">Save Rota</button>`, true);
+  `, `<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveRotaForm('${id||''}')">Save Rota</button>`, true);
   renderRotaBuildOrderChips();
 }
 async function saveRotaForm(id){
@@ -2444,7 +2469,7 @@ function openRotaSendModal(id){
       <button class="btn btn-secondary btn-sm" onclick="Notify.notifyHallGroup(document.getElementById('rotaScheduleText').value)">Send to Hall Group</button>
       ${group?.contactPhone?`<button class="btn btn-secondary btn-sm" onclick="Notify.openWhatsApp('${group.contactPhone}', document.getElementById('rotaScheduleText').value)">Send to ${escapeHtml(group.name)}</button>`:''}
     </div>
-  `, `<button class="btn btn-secondary" onclick="Modal.close()">Close</button>`, true);
+  `, `<button class="btn btn-secondary" onclick="Modal.requestClose()">Close</button>`, true);
 }
 
 // ---------------------------------------------------------------------
@@ -2532,7 +2557,7 @@ function openCustomerOptionsSheet(){
     <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cosIncludeEquipPrices" checked> Include chairs / tables / tea-making prices</label></div>
     <div class="field"><label>Message to customer (optional)</label><textarea id="cosMessage" rows="3" placeholder="e.g. Here are a few layout options from recent events..."></textarea></div>
   `, `
-    <button class="btn btn-secondary" onclick="Modal.close()">Cancel</button>
+    <button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button>
     <button class="btn btn-primary" onclick="buildCustomerOptionsSheet()">Build &amp; Print</button>
   `);
 }
@@ -2576,7 +2601,7 @@ function openLightbox(id){
     <p class="small muted">Added ${displayStamp(p.uploadedAt)} by ${escapeHtml(p.uploadedBy||'')}</p>
   `, `
     ${canDelete?`<button class="btn btn-danger" onclick="deleteGalleryPhoto('${id}')">Delete</button>`:''}
-    <button class="btn btn-secondary" onclick="Modal.close()">Close</button>
+    <button class="btn btn-secondary" onclick="Modal.requestClose()">Close</button>
     <button class="btn btn-primary" onclick="saveGalleryCaption('${id}')">Save Caption</button>
   `, true);
 }
@@ -2653,7 +2678,7 @@ function openEnergyReadingModal(id){
     </div>
     <div class="field"><label>Grid exported (kWh, if you sell back — optional)</label><input type="number" step="0.1" id="enExport" value="${r?.gridExportKwh ?? 0}"></div>
     <div class="field"><label>Notes</label><input type="text" id="enNotes" value="${escapeHtml(r?.notes||'')}"></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveEnergyReading('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveEnergyReading('${id||''}')">Save</button>`);
 }
 async function saveEnergyReading(id){
   const data = { date:document.getElementById('enDate').value, solarKwh:Number(document.getElementById('enSolar').value)||0, gridImportKwh:Number(document.getElementById('enImport').value)||0, gridExportKwh:Number(document.getElementById('enExport').value)||0, notes:document.getElementById('enNotes').value };
@@ -2742,7 +2767,7 @@ function openEquipmentItemModal(id){
     </div>
     ${itemImageFieldHtml(it?.imageDataUrl, 'eqImagePreview', 168)}
     <div class="field"><label>Notes</label><input type="text" id="eqNotes" value="${escapeHtml(it?.notes||'')}"></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveEquipmentItem('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveEquipmentItem('${id||''}')">Save</button>`);
 }
 async function saveEquipmentItem(id){
   const name = document.getElementById('eqName').value.trim();
@@ -2782,7 +2807,7 @@ function openEquipmentLoanModal(id){
     </div>
     <div class="field"><label>Due back date</label><input type="date" id="loanDue" value="${l?.dueReturnDate||''}"></div>
     <div class="field"><label>Notes</label><input type="text" id="loanNotes" value="${escapeHtml(l?.notes||'')}"></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveEquipmentLoan('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveEquipmentLoan('${id||''}')">Save</button>`);
 }
 async function saveEquipmentLoan(id){
   const equipmentItemId = document.getElementById('loanItem').value;
@@ -2851,7 +2876,7 @@ function openMaintenanceModal(id){
     </div>
     <div class="field"><label>Contractor email</label><input type="email" id="mtContractorEmail" value="${escapeHtml(m?.contractorEmail||'')}"></div>
     <div class="field"><label>Notes</label><input type="text" id="mtNotes" value="${escapeHtml(m?.notes||'')}"></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveMaintenanceItem('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveMaintenanceItem('${id||''}')">Save</button>`);
 }
 async function saveMaintenanceItem(id){
   const name = document.getElementById('mtName').value.trim();
@@ -2900,7 +2925,7 @@ function openDoorCodeModal(id){
     <div class="field"><label>Code (or account number)</label><input type="text" id="dcCode" value="${escapeHtml(c?.code||'')}"></div>
     ${itemImageFieldHtml(c?.imageDataUrl, 'dcImagePreview', 168)}
     <div class="field"><label>Notes</label><textarea id="dcNotes" rows="2" placeholder="e.g. change after each key holder change, or contact info/address for an account">${escapeHtml(c?.notes||'')}</textarea></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveDoorCode('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveDoorCode('${id||''}')">Save</button>`);
 }
 async function saveDoorCode(id){
   const label = document.getElementById('dcLabel').value.trim();
@@ -2974,7 +2999,7 @@ function openVolunteerGroupModal(id){
     <div class="field"><label>Name</label><input type="text" id="vgName" value="${escapeHtml(g?.name||'')}" placeholder="e.g. Coffee Morning, Tractor Run, Spooky Walk, Car Park Supervisor, Traffic Coordinator"></div>
     <div class="field"><label>Coordinator (full-time committee member in charge, optional)</label><select id="vgCoordinator"><option value="">— none —</option>${members.map(m=>`<option value="${m.id}" ${g?.coordinatorMemberId===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('')}</select></div>
     <div class="field"><label>Notes</label><textarea id="vgNotes" rows="2">${escapeHtml(g?.notes||'')}</textarea></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveVolunteerGroup('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveVolunteerGroup('${id||''}')">Save</button>`);
 }
 async function saveVolunteerGroup(id){
   const name = document.getElementById('vgName').value.trim();
@@ -2996,7 +3021,7 @@ function openVolunteerModal(id, groupId){
       <div class="field"><label>Email (optional)</label><input type="email" id="volEmail" value="${escapeHtml(v?.email||'')}"></div>
     </div>
     <div class="field"><label>Note (e.g. what they like doing)</label><input type="text" id="volNote" value="${escapeHtml(v?.note||'')}" placeholder="e.g. likes doing the washing up, good with collecting money"></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveVolunteer('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveVolunteer('${id||''}')">Save</button>`);
 }
 async function saveVolunteer(id){
   const name = document.getElementById('volName').value.trim();
@@ -3039,7 +3064,7 @@ function openSponsorModal(id){
       <div class="field"><label>Email</label><input type="email" id="spEmail" value="${escapeHtml(s?.email||'')}"></div>
     </div>
     <div class="field"><label>Notes</label><textarea id="spNotes" rows="2">${escapeHtml(s?.notes||'')}</textarea></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveSponsor('${id||''}')">Save</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveSponsor('${id||''}')">Save</button>`);
 }
 async function saveSponsor(id){
   const name = document.getElementById('spName').value.trim();
@@ -3061,7 +3086,7 @@ function openContactEmailModal(toEmail, toName){
     <div class="field"><label>Subject</label><input type="text" id="ceSubject" value="${escapeHtml(subject)}"></div>
     <div class="field"><label>Message</label><textarea id="ceBody" rows="8" style="width:100%;font-size:12.5px;padding:8px;border:1px solid var(--gray-300);border-radius:8px;">${escapeHtml(body)}</textarea></div>
   `, `
-    <button class="btn btn-secondary" onclick="Modal.close()">Cancel</button>
+    <button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button>
     <button class="btn btn-secondary" onclick="Notify.openMailto('${toEmail}', document.getElementById('ceSubject').value, document.getElementById('ceBody').value)">Send via Email</button>
     ${c.emailAutoEnabled?`<button class="btn btn-primary" onclick="sendContactEmailNow('${toEmail}')">Send Automatically Now</button>`:''}
   `, true);
@@ -3273,7 +3298,7 @@ function openUserModal(){
     <div class="field"><label>Password</label><input type="password" id="uPassword" minlength="4"></div>
     <div class="field"><label>Role</label><select id="uRole" onchange="document.getElementById('uAdminKeyField').style.display=(this.value==='admin' && ${requireKey})?'block':'none'"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
     <div class="field" id="uAdminKeyField" style="display:none;"><label>Admin promotion key</label><input type="password" id="uAdminKey"></div>
-  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveNewUser()">Create User</button>`);
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveNewUser()">Create User</button>`);
 }
 async function saveNewUser(){
   const username = document.getElementById('uUsername').value.trim();
@@ -3300,7 +3325,7 @@ function openResetPasswordModal(id, username){
   Modal.open('Reset Password — '+username, `
     <p class="small muted" style="margin-top:-6px;">Sets a new password for this login right away — no need to know the old one.</p>
     <div class="field"><label>New password</label><input type="password" id="rpNewPassword" minlength="4" autocomplete="new-password"></div>
-  `, `<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="submitResetPassword('${id}')">Reset Password</button>`);
+  `, `<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="submitResetPassword('${id}')">Reset Password</button>`);
 }
 async function submitResetPassword(id){
   if(Session.role!=='admin'){ toast('Only an Admin can reset passwords', true); return; }
@@ -3376,7 +3401,7 @@ function whosOnlineCardHtml(){
   </div>`;
 }
 function openWhosOnlineModal(){
-  Modal.open("Who's Online", whosOnlineCardHtml(), `<button class="btn btn-secondary" onclick="Modal.close()">Close</button>`);
+  Modal.open("Who's Online", whosOnlineCardHtml(), `<button class="btn btn-secondary" onclick="Modal.requestClose()">Close</button>`);
 }
 function revisionLineHtml(){
   const modeLabel = ConnStatus.mode==='online' ? 'Firebase' : ConnStatus.mode==='offline' ? 'Firebase (offline)' : 'Local Demo Mode';

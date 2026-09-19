@@ -388,7 +388,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 108;
+const APP_REVISION = 109;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -999,7 +999,8 @@ function printBookingSummary(id){
   } else if(room && Number(room.hireRate)){
     costLines.push([room.name+' hire', Number(room.hireRate)]);
   }
-  if(eventType && Number(eventType.standardRate)) costLines.push([eventType.name+' ('+eventType.chargingMethod+')', Number(eventType.standardRate)]);
+  if(eventType && eventType.chargingMethod==='Free / No Charge') costLines.push([eventType.name+' — Free (no charge)', 0]);
+  else if(eventType && Number(eventType.standardRate)) costLines.push([eventType.name+' ('+eventType.chargingMethod+')', Number(eventType.standardRate)]);
 
   const body = `
     <table class="print-table">
@@ -1388,7 +1389,7 @@ function openBookingModal(id){
       <div class="field"><label>Group / Booked by</label><select id="fGroup" onchange="handleGroupSelectChange(this)">${opt(groups, b?.groupId, g=>g.name)}<option value="__new__">+ Add new group…</option></select></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Event type</label><select id="fEventType" onchange="const et=get('eventTypes',this.value); document.getElementById('fRateHint').textContent = et?('Standard rate: '+euro(et.standardRate)+' ('+et.chargingMethod+')'):''; updateBookingCostEstimate();">${opt(eventTypes, b?.eventTypeId, e=>e.name)}</select><div class="small muted" id="fRateHint" style="margin-top:4px;"></div></div>
+      <div class="field"><label>Event type</label><select id="fEventType" onchange="const et=get('eventTypes',this.value); document.getElementById('fRateHint').textContent = et?(et.chargingMethod==='Free / No Charge'?'Free — no charge':'Standard rate: '+euro(et.standardRate)+' ('+et.chargingMethod+')'):''; updateBookingCostEstimate();">${opt(eventTypes, b?.eventTypeId, e=>e.name)}</select><div class="small muted" id="fRateHint" style="margin-top:4px;"></div></div>
     </div>
     <div class="field-row">
       <div class="field"><label>Date (first / only occurrence)</label><input type="date" id="fDate" value="${b?.bookingDate||todayIso()}"></div>
@@ -1448,7 +1449,9 @@ function computeBookingCostBreakdown(){
   }
   const etId = document.getElementById('fEventType').value;
   const et = etId ? get('eventTypes', etId) : null;
-  if(et && Number(et.standardRate)){
+  if(et && et.chargingMethod==='Free / No Charge'){
+    lines.push([et.name+' — Free (no charge)', 0]);
+  } else if(et && Number(et.standardRate)){
     if(et.chargingMethod==='Per Hour'){
       const start = document.getElementById('fStart').value, end = document.getElementById('fEnd').value;
       let hours = 0;
@@ -1663,28 +1666,42 @@ async function saveMember(id){
 // ---------------------------------------------------------------------
 // 7d. PAYMENTS & EXPENSES (FINANCE)
 // ---------------------------------------------------------------------
-const FinanceUI = { tab:'payments' };
+const FinanceUI = { tab:'payments', paymentSearch:'' };
+function paymentSearchable(p){
+  const b = get('bookings', p.bookingId);
+  const group = b ? get('groups', b.groupId) : null;
+  return [b?bookingLabel(b):'', group?group.name:'', b?eventTypeName(b.eventTypeId):'', p.notes||''].join(' ').toLowerCase();
+}
+function setFinancePaymentSearch(val){ FinanceUI.paymentSearch = val; renderFinance(); }
 function renderFinance(){
   const canDelete = Session.role==='admin';
-  const payments = list('payments').sort((a,b)=>(b.paymentDate||'').localeCompare(a.paymentDate||''));
+  const allPayments = list('payments').sort((a,b)=>(b.paymentDate||'').localeCompare(a.paymentDate||''));
+  const searchTerm = (FinanceUI.paymentSearch||'').trim().toLowerCase();
+  const payments = searchTerm ? allPayments.filter(p=>paymentSearchable(p).includes(searchTerm)) : allPayments;
   const expenses = list('expenses').sort((a,b)=>(b.expenseDate||'').localeCompare(a.expenseDate||''));
 
   const monthly = {};
-  payments.forEach(p=>{ const ym=(p.paymentDate||'').slice(0,7); if(!ym) return; monthly[ym]=monthly[ym]||{income:0,count:0}; monthly[ym].income+=Number(p.amountPaid||0); monthly[ym].count++; });
+  allPayments.forEach(p=>{ const ym=(p.paymentDate||'').slice(0,7); if(!ym) return; monthly[ym]=monthly[ym]||{income:0,count:0}; monthly[ym].income+=Number(p.amountPaid||0); monthly[ym].count++; });
   expenses.forEach(e=>{ const ym=(e.expenseDate||'').slice(0,7); if(!ym) return; monthly[ym]=monthly[ym]||{income:0,count:0}; monthly[ym].expense=(monthly[ym].expense||0)+Number(e.amount||0); });
   const months = Object.keys(monthly).sort().reverse();
 
   const byGroup = {};
-  payments.forEach(p=>{
+  allPayments.forEach(p=>{
     const b = get('bookings', p.bookingId); if(!b) return;
     const ym=(p.paymentDate||'').slice(0,7); const gName = get('groups',b.groupId)?.name || 'Unknown';
     const key = ym+'|'+gName; byGroup[key]=byGroup[key]||{ym,gName,total:0}; byGroup[key].total+=Number(p.amountPaid||0);
   });
   const groupRows = Object.values(byGroup).sort((a,b)=> b.ym.localeCompare(a.ym) || a.gName.localeCompare(b.gName));
 
+  const eventProfitRows = list('bookings').map(b=>{
+    const income = allPayments.filter(p=>p.bookingId===b.id).reduce((s,p)=>s+Number(p.amountPaid||0),0);
+    const cost = expenses.filter(e=>e.bookingId===b.id).reduce((s,e)=>s+Number(e.amount||0),0);
+    return { b, income, cost, net: income-cost };
+  }).filter(r=>r.income>0 || r.cost>0).sort((a,b)=>(b.b.bookingDate||'').localeCompare(a.b.bookingDate||''));
+
   document.getElementById('panel-finance').innerHTML = `
     <div class="grid grid-2">
-      <div class="stat-tile"><div class="label">Total income recorded</div><div class="value">${euro(payments.reduce((s,p)=>s+Number(p.amountPaid||0),0))}</div></div>
+      <div class="stat-tile"><div class="label">Total income recorded</div><div class="value">${euro(allPayments.reduce((s,p)=>s+Number(p.amountPaid||0),0))}</div></div>
       <div class="stat-tile warn"><div class="label">Total expenses recorded</div><div class="value">${euro(expenses.reduce((s,e)=>s+Number(e.amount||0),0))}</div></div>
     </div>
     <div class="card">
@@ -1698,25 +1715,31 @@ function renderFinance(){
         ${FinanceUI.tab==='expenses'?'<button class="btn btn-primary" onclick="openExpenseModal()">+ Record Expense</button>':''}
       </div>
       ${FinanceUI.tab==='payments' ? `
+        <div class="field" style="max-width:340px;margin-bottom:10px;"><label class="small muted">Search by group or booking</label><input type="text" placeholder="e.g. Card Club, or Main Hall" value="${escapeHtml(FinanceUI.paymentSearch)}" oninput="setFinancePaymentSearch(this.value)"></div>
         <div class="table-wrap"><table><thead><tr><th>Date</th><th>Booking</th><th>Amount</th><th>Method</th><th>Donation</th><th>Lodged</th><th>Notes</th><th></th></tr></thead><tbody>
           ${payments.length?payments.map(p=>{ const b=get('bookings',p.bookingId); return `<tr>
             <td>${displayDate(p.paymentDate)}</td><td>${b?escapeHtml(bookingLabel(b)):'<span class="muted">deleted booking</span>'}</td><td>${euro(p.amountPaid)}</td><td>${escapeHtml(p.paymentMethod||'')}</td><td>${p.isDonation?'<span class="pill pill-green">Yes</span>':''}</td><td>${paymentLodgeCellHtml(p)}</td><td class="small muted">${escapeHtml(p.notes||'')}</td>
             <td style="white-space:nowrap;"><button class="icon-btn" onclick="openPaymentModal('${p.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('payments','${p.id}','payment')">🗑</button>`:''}</td>
-          </tr>`; }).join(''):'<tr class="empty-row"><td colspan="8">No payments recorded</td></tr>'}
+          </tr>`; }).join(''):`<tr class="empty-row"><td colspan="8">${searchTerm?'No payments match that search':'No payments recorded'}</td></tr>`}
         </tbody></table></div>
       `:''}
       ${FinanceUI.tab==='expenses' ? `
-        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Supplier</th><th>Description</th><th>Category</th><th>Amount</th><th></th></tr></thead><tbody>
-          ${expenses.length?expenses.map(e=>`<tr>
-            <td>${displayDate(e.expenseDate)}</td><td>${escapeHtml(e.supplierName||'')}</td><td>${escapeHtml(e.description||'')}</td><td><span class="pill pill-gray">${escapeHtml(e.category||'')}</span></td><td>${euro(e.amount)}</td>
+        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Supplier</th><th>Description</th><th>Category</th><th>Amount</th><th>Event/Booking</th><th></th></tr></thead><tbody>
+          ${expenses.length?expenses.map(e=>{ const b = e.bookingId?get('bookings',e.bookingId):null; return `<tr>
+            <td>${displayDate(e.expenseDate)}</td><td>${escapeHtml(e.supplierName||'')}</td><td>${escapeHtml(e.description||'')}</td><td><span class="pill pill-gray">${escapeHtml(e.category||'')}</span></td><td>${euro(e.amount)}</td><td class="small muted">${b?escapeHtml(bookingLabel(b)):'—'}</td>
             <td style="white-space:nowrap;"><button class="icon-btn" onclick="openExpenseModal('${e.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('expenses','${e.id}','expense')">🗑</button>`:''}</td>
-          </tr>`).join(''):'<tr class="empty-row"><td colspan="6">No expenses recorded</td></tr>'}
+          </tr>`; }).join(''):'<tr class="empty-row"><td colspan="7">No expenses recorded</td></tr>'}
         </tbody></table></div>
       `:''}
       ${FinanceUI.tab==='reports' ? `
         <h4 class="section-title" style="font-size:13.5px;margin-top:4px;">Monthly income vs expenses</h4>
         <div class="table-wrap"><table><thead><tr><th>Month</th><th>Income</th><th>Expenses</th><th>Net</th><th># Payments</th></tr></thead><tbody>
           ${months.length?months.map(ym=>{ const r=monthly[ym]; const net=(r.income||0)-(r.expense||0); return `<tr><td>${displayMonth(ym)}</td><td>${euro(r.income||0)}</td><td>${euro(r.expense||0)}</td><td style="${net<0?'color:var(--red-600);font-weight:600;':''}">${euro(net)}</td><td>${r.count||0}</td></tr>`; }).join(''):'<tr class="empty-row"><td colspan="5">No data yet</td></tr>'}
+        </tbody></table></div>
+        <h4 class="section-title" style="font-size:13.5px;margin-top:20px;">Cost vs profit by event</h4>
+        <p class="small muted" style="margin:-6px 0 8px;">Only shows bookings that have a payment and/or a linked expense against them — link an expense to a booking when recording it to see it here.</p>
+        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Event/Booking</th><th>Income</th><th>Costs</th><th>Net profit</th></tr></thead><tbody>
+          ${eventProfitRows.length?eventProfitRows.map(r=>`<tr><td>${displayDate(r.b.bookingDate)}</td><td>${escapeHtml(bookingLabel(r.b))}</td><td>${euro(r.income)}</td><td>${euro(r.cost)}</td><td style="${r.net<0?'color:var(--red-600);font-weight:600;':'font-weight:600;'}">${euro(r.net)}</td></tr>`).join(''):'<tr class="empty-row"><td colspan="5">No events with payments or linked expenses yet</td></tr>'}
         </tbody></table></div>
         <h4 class="section-title" style="font-size:13.5px;margin-top:20px;">Income by group, per month</h4>
         <div class="table-wrap"><table><thead><tr><th>Month</th><th>Group</th><th>Total income</th></tr></thead><tbody>
@@ -1786,6 +1809,7 @@ async function savePayment(id){
 
 function openExpenseModal(id){
   const e = id?get('expenses',id):null;
+  const bookings = list('bookings').sort((a,b)=>(b.bookingDate||'').localeCompare(a.bookingDate||''));
   Modal.open(id?'Edit Expense':'Record Expense', `
     <div class="field-row">
       <div class="field"><label>Date</label><input type="date" id="eDate" value="${e?.expenseDate||todayIso()}"></div>
@@ -1794,12 +1818,13 @@ function openExpenseModal(id){
     <div class="field"><label>Supplier</label><input type="text" id="eSupplier" value="${escapeHtml(e?.supplierName||'')}"></div>
     <div class="field"><label>Description</label><input type="text" id="eDesc" value="${escapeHtml(e?.description||'')}"></div>
     <div class="field"><label>Category</label><select id="eCategory">${['Electricity','Gas','Insurance','Maintenance','Supplies','Cleaning','Other'].map(c=>`<option ${e?.category===c?'selected':''}>${c}</option>`).join('')}</select></div>
+    <div class="field"><label>Linked event/booking (optional — lets you see cost vs profit for that event in Reports)</label><select id="eBooking"><option value="">— not linked to a specific event —</option>${bookings.map(b=>`<option value="${b.id}" ${e?.bookingId===b.id?'selected':''}>${escapeHtml(bookingLabel(b))} — ${displayDate(b.bookingDate)}</option>`).join('')}</select></div>
   `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveExpense('${id||''}')">Save</button>`);
 }
 async function saveExpense(id){
   const amount = Number(document.getElementById('eAmount').value);
   if(!amount){ toast('Enter an amount', true); return; }
-  const data = { expenseDate:document.getElementById('eDate').value, amount, supplierName:document.getElementById('eSupplier').value, description:document.getElementById('eDesc').value, category:document.getElementById('eCategory').value };
+  const data = { expenseDate:document.getElementById('eDate').value, amount, supplierName:document.getElementById('eSupplier').value, description:document.getElementById('eDesc').value, category:document.getElementById('eCategory').value, bookingId:document.getElementById('eBooking').value||null };
   if(id) await db.ref('expenses/'+id).update(data); else await db.ref('expenses').push(data);
   await logActivity(id?'Edited expense':'Recorded expense', euro(amount)+' - '+data.supplierName);
   Modal.close(); toast('Expense saved');
@@ -1834,7 +1859,7 @@ function renderSetup(){
       <div class="card-title">Event Types &amp; Standard Rates <button class="btn btn-primary btn-sm" onclick="openEventTypeModal()">+ Add Event Type</button></div>
       <div class="table-wrap"><table><thead><tr><th>Name</th><th>Charging method</th><th>Standard rate</th><th>Notes</th><th></th></tr></thead><tbody>
         ${eventTypes.length?eventTypes.map(e=>`<tr>
-          <td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.chargingMethod||'')}</td><td>${euro(e.standardRate)}</td><td class="small muted">${escapeHtml(e.notes||'')}</td>
+          <td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.chargingMethod||'')}</td><td>${e.chargingMethod==='Free / No Charge'?'<span class="pill pill-green">Free</span>':euro(e.standardRate)}</td><td class="small muted">${escapeHtml(e.notes||'')}</td>
           <td style="white-space:nowrap;"><button class="icon-btn" onclick="openEventTypeModal('${e.id}')">✎</button><button class="icon-btn danger" onclick="deleteRecord('eventTypes','${e.id}','event type')">🗑</button></td>
         </tr>`).join(''):'<tr class="empty-row"><td colspan="5">No event types yet</td></tr>'}
       </tbody></table></div>
@@ -1923,21 +1948,25 @@ async function saveRoom(id){
   Modal.close(); toast('Room saved');
 }
 
+const EVENT_CHARGING_METHODS = ['Per Table','Per Hour','Per Day','Per 6 Week Block','Donation','Flat Rate','Free / No Charge'];
 function openEventTypeModal(id){
   const e = id?get('eventTypes',id):null;
+  const isFree = e?.chargingMethod==='Free / No Charge';
   Modal.open(id?'Edit Event Type':'Add Event Type', `
-    <div class="field"><label>Name</label><input type="text" id="etName" value="${escapeHtml(e?.name||'')}"></div>
+    <div class="field"><label>Name</label><input type="text" id="etName" value="${escapeHtml(e?.name||'')}" placeholder="e.g. Community Event, Charity Fundraiser, Card Night"></div>
     <div class="field-row">
-      <div class="field"><label>Charging method</label><select id="etMethod">${['Per Table','Per Hour','Per Day','Per 6 Week Block','Donation','Flat Rate'].map(m=>`<option ${e?.chargingMethod===m?'selected':''}>${m}</option>`).join('')}</select></div>
-      <div class="field"><label>Standard rate (€)</label><input type="number" step="0.01" id="etRate" value="${e?.standardRate ?? 0}"></div>
+      <div class="field"><label>Charging method</label><select id="etMethod" onchange="document.getElementById('etRateWrap').style.display=(this.value==='Free / No Charge')?'none':'block'">${EVENT_CHARGING_METHODS.map(m=>`<option ${e?.chargingMethod===m?'selected':''}>${m}</option>`).join('')}</select></div>
+      <div class="field" id="etRateWrap" style="display:${isFree?'none':'block'};"><label>Standard rate (€)</label><input type="number" step="0.01" id="etRate" value="${e?.standardRate ?? 0}"></div>
     </div>
+    <p class="small muted" style="margin-top:-8px;">Use "Free / No Charge" for community events, fundraisers or charity cake sales where the hall doesn't charge the group a room fee — it'll show clearly as Free on the booking rather than just a €0.00 rate.</p>
     <div class="field"><label>Notes</label><textarea id="etNotes" rows="2">${escapeHtml(e?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveEventType('${id||''}')">Save</button>`);
 }
 async function saveEventType(id){
   const name = document.getElementById('etName').value.trim();
   if(!name){ toast('Name required', true); return; }
-  const data = { name, chargingMethod:document.getElementById('etMethod').value, standardRate:Number(document.getElementById('etRate').value)||0, notes:document.getElementById('etNotes').value };
+  const chargingMethod = document.getElementById('etMethod').value;
+  const data = { name, chargingMethod, standardRate: chargingMethod==='Free / No Charge' ? 0 : (Number(document.getElementById('etRate').value)||0), notes:document.getElementById('etNotes').value };
   if(id) await db.ref('eventTypes/'+id).update(data); else await db.ref('eventTypes').push(data);
   await logActivity(id?'Edited event type':'Added event type', name);
   Modal.close(); toast('Event type saved');
@@ -2754,22 +2783,25 @@ function renderDoorCodes(){
   document.getElementById('panel-doorcodes').innerHTML = `
     <div class="card">
       <div class="toolbar"><h3 class="section-title" style="margin:0;">Door &amp; Lock Codes</h3><button class="btn btn-primary" onclick="openDoorCodeModal()">+ Add Code</button></div>
-      <p class="section-desc" style="margin-top:-10px;">Front door, lock box, side gate, alarm — anything with its own code or combination. Visible to anyone logged in (Admin or Staff), same as the rest of the app.</p>
-      <div class="table-wrap"><table><thead><tr><th>Where</th><th>Code</th><th>Notes</th><th></th></tr></thead><tbody>
+      <p class="section-desc" style="margin-top:-10px;">Front door, lock box, side gate, alarm — anything with its own code or combination. Also handy for utility/account details like ESB, gas or the alarm monitoring company: put the account number in "Code" and contact info/address in Notes. Visible to anyone logged in (Admin or Staff), same as the rest of the app.</p>
+      <div class="table-wrap"><table><thead><tr><th></th><th>Where</th><th>Code</th><th>Notes</th><th></th></tr></thead><tbody>
         ${codes.length?codes.map(c=>`<tr>
+          <td>${c.imageDataUrl?`<img src="${c.imageDataUrl}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">`:'<span class="muted small">—</span>'}</td>
           <td>${escapeHtml(c.label)}</td><td><strong style="font-family:monospace;font-size:15px;letter-spacing:1px;">${escapeHtml(c.code)}</strong></td><td class="small muted">${escapeHtml(c.notes||'')}</td>
           <td style="white-space:nowrap;"><button class="icon-btn" onclick="openDoorCodeModal('${c.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('doorCodes','${c.id}','code')">🗑</button>`:''}</td>
-        </tr>`).join(''):'<tr class="empty-row"><td colspan="4">No codes saved yet — add the front door, lock box, alarm, whatever you need on hand.</td></tr>'}
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="5">No codes saved yet — add the front door, lock box, alarm, whatever you need on hand.</td></tr>'}
       </tbody></table></div>
     </div>
   `;
 }
 function openDoorCodeModal(id){
   const c = id?get('doorCodes',id):null;
+  _pendingItemImageDataUrl = null;
   Modal.open(id?'Edit Code':'Add Code', `
-    <div class="field"><label>Where (e.g. Front Door, Lock Box, Side Gate, Alarm)</label><input type="text" id="dcLabel" value="${escapeHtml(c?.label||'')}"></div>
-    <div class="field"><label>Code</label><input type="text" id="dcCode" value="${escapeHtml(c?.code||'')}"></div>
-    <div class="field"><label>Notes</label><textarea id="dcNotes" rows="2" placeholder="e.g. change after each key holder change">${escapeHtml(c?.notes||'')}</textarea></div>
+    <div class="field"><label>Where (e.g. Front Door, Lock Box, Side Gate, Alarm, ESB Account)</label><input type="text" id="dcLabel" value="${escapeHtml(c?.label||'')}"></div>
+    <div class="field"><label>Code (or account number)</label><input type="text" id="dcCode" value="${escapeHtml(c?.code||'')}"></div>
+    ${itemImageFieldHtml(c?.imageDataUrl, 'dcImagePreview')}
+    <div class="field"><label>Notes</label><textarea id="dcNotes" rows="2" placeholder="e.g. change after each key holder change, or contact info/address for an account">${escapeHtml(c?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveDoorCode('${id||''}')">Save</button>`);
 }
 async function saveDoorCode(id){
@@ -2777,6 +2809,7 @@ async function saveDoorCode(id){
   const code = document.getElementById('dcCode').value.trim();
   if(!label || !code){ toast('Both "Where" and "Code" are required', true); return; }
   const data = { label, code, notes: document.getElementById('dcNotes').value };
+  if(_pendingItemImageDataUrl) data.imageDataUrl = _pendingItemImageDataUrl;
   if(id) await db.ref('doorCodes/'+id).update(data); else await db.ref('doorCodes').push(data);
   await logActivity(id?'Edited door/lock code':'Added door/lock code', label);
   Modal.close(); toast('Code saved');

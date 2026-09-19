@@ -393,7 +393,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 112;
+const APP_REVISION = 113;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -1109,6 +1109,12 @@ function occurrenceIndexOf(booking, dateIso){
 function resolveTaskAssignee(booking, taskId, occDate){
   const t = booking.tasks && booking.tasks[taskId];
   if(!t) return null;
+  if(t.followRotaId){
+    const rota = get('rotas', t.followRotaId);
+    if(!rota) return null;
+    // Always reads the Rota tab live, so this task can never go stale when the rota changes.
+    return { name: rotaSlotLabel(rota, rotaSlotIndexForDate(rota, occDate)) };
+  }
   if(t.rotationMemberIds && t.rotationMemberIds.length){
     const idx = occurrenceIndexOf(booking, occDate);
     return get('members', t.rotationMemberIds[idx % t.rotationMemberIds.length]);
@@ -1374,26 +1380,41 @@ function openBookingModal(id){
   const rooms = list('rooms'), groups = list('groups'), eventTypes = list('eventTypes'), templates = list('taskTemplates'), members = list('members');
   const opt = (arr, val, labelFn) => arr.map(x=>`<option value="${x.id}" ${val===x.id?'selected':''}>${escapeHtml(labelFn(x))}</option>`).join('');
 
+  const rotasForTasks = list('rotas').sort((a,b)=>a.name.localeCompare(b.name));
   const taskRowsHtml = templates.map(t=>{
     const existing = b && b.tasks && b.tasks[t.id];
     const isRotating = !!(existing && existing.rotationMemberIds && existing.rotationMemberIds.length);
+    const isFollowingRota = !!(existing && existing.followRotaId);
+    const mode = isFollowingRota ? 'rota' : (isRotating ? 'rotate' : 'fixed');
     return `<div class="task-row-block" data-task-id="${t.id}" style="padding:8px 0;border-bottom:1px solid var(--gray-100);">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span style="width:110px;flex-shrink:0;font-size:12.5px;font-weight:600;">${escapeHtml(t.name)}</span>
-        <label class="small" style="display:flex;align-items:center;gap:4px;white-space:nowrap;"><input type="checkbox" data-role="rotate" ${isRotating?'checked':''} onchange="const blk=this.closest('.task-row-block'); blk.querySelector('[data-role=fixedWrap]').style.display=this.checked?'none':'block'; blk.querySelector('[data-role=rotateWrap]').style.display=this.checked?'block':'none';"> Rotate weekly between members</label>
+        <select data-role="assignMode" style="width:220px;" onchange="const blk=this.closest('.task-row-block'); const m=this.value; blk.querySelector('[data-role=fixedWrap]').style.display=(m==='fixed')?'block':'none'; blk.querySelector('[data-role=rotateWrap]').style.display=(m==='rotate')?'block':'none'; blk.querySelector('[data-role=rotaWrap]').style.display=(m==='rota')?'block':'none';">
+          <option value="fixed" ${mode==='fixed'?'selected':''}>One person</option>
+          <option value="rotate" ${mode==='rotate'?'selected':''}>Rotate weekly between members</option>
+          <option value="rota" ${mode==='rota'?'selected':''}>Follow a Rota</option>
+        </select>
         <label class="small" style="display:flex;align-items:center;gap:5px;white-space:nowrap;"><input type="checkbox" data-role="done" ${existing&&existing.isCompleted?'checked':''}> Done</label>
       </div>
-      <div data-role="fixedWrap" style="display:${isRotating?'none':'block'};margin-top:5px;">
+      <div data-role="fixedWrap" style="display:${mode==='fixed'?'block':'none'};margin-top:5px;">
         <select data-role="member" style="width:100%;">
           <option value="">Unassigned</option>
           ${opt(members, existing?existing.memberId:'', m=>m.name)}
         </select>
       </div>
-      <div data-role="rotateWrap" style="display:${isRotating?'block':'none'};margin-top:5px;">
+      <div data-role="rotateWrap" style="display:${mode==='rotate'?'block':'none'};margin-top:5px;">
         <div class="small muted" style="margin-bottom:4px;">Rotates in this order, one person per week/occurrence:</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
           ${members.map(m=>`<label class="small" style="display:flex;align-items:center;gap:4px;background:var(--gray-100);padding:3px 9px;border-radius:20px;"><input type="checkbox" data-role="rotmember" value="${m.id}" ${existing&&existing.rotationMemberIds&&existing.rotationMemberIds.includes(m.id)?'checked':''}> ${escapeHtml(m.name)}</label>`).join('') || '<span class="muted small">Add members first</span>'}
         </div>
+      </div>
+      <div data-role="rotaWrap" style="display:${mode==='rota'?'block':'none'};margin-top:5px;">
+        <div class="small muted" style="margin-bottom:4px;">Whoever's on duty on the Rota tab for this date does this task — update the rota once and this stays in sync, instead of going stale.</div>
+        <select data-role="followRota" style="width:100%;">
+          <option value="">— pick a Rota —</option>
+          ${rotasForTasks.map(r=>`<option value="${r.id}" ${existing&&existing.followRotaId===r.id?'selected':''}>${escapeHtml(r.name)}</option>`).join('')}
+        </select>
+        ${!rotasForTasks.length?'<div class="small muted" style="margin-top:4px;">No rotas set up yet — add one in the Rota tab first.</div>':''}
       </div>
     </div>`;
   }).join('') || '<p class="muted small">No task templates yet — add some in the Setup tab.</p>';
@@ -1543,8 +1564,11 @@ async function saveBookingForm(id){
   document.querySelectorAll('#fTasks .task-row-block').forEach(row=>{
     const taskId = row.dataset.taskId;
     const isCompleted = row.querySelector('[data-role="done"]').checked;
-    const isRotate = row.querySelector('[data-role="rotate"]').checked;
-    if(isRotate){
+    const mode = row.querySelector('[data-role="assignMode"]').value;
+    if(mode==='rota'){
+      const followRotaId = row.querySelector('[data-role="followRota"]').value;
+      tasks[taskId] = { followRotaId: followRotaId||null, isCompleted };
+    } else if(mode==='rotate'){
       const ids = Array.from(row.querySelectorAll('[data-role="rotmember"]:checked')).map(cb=>cb.value);
       tasks[taskId] = { rotationMemberIds: ids, isCompleted };
     } else {
@@ -2221,6 +2245,14 @@ function rotaUpcomingDates(rota, count, fromIso){
     cur = rotaAddStep(cur, rota.frequency); idx++; safety++;
   }
   return results;
+}
+function rotaSlotIndexForDate(rota, dateIso){
+  if(!rota.slots || !rota.slots.length) return 0;
+  const target = isoToDate(dateIso);
+  let cur = isoToDate(rota.startDate);
+  let idx = 0, safety = 0;
+  while(cur < target && safety < 5000){ cur = rotaAddStep(cur, rota.frequency); idx++; safety++; }
+  return idx % rota.slots.length;
 }
 function rotaSlotMembers(rota, slotIndex){
   const slot = (rota.slots||[])[slotIndex] || [];

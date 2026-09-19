@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Mullagh Community Centre — Hall Manager</title>
 <style>
   :root{
@@ -356,6 +359,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="mullagh-config.js"></script>
 <script>
 /* =========================================================================
    MULLAGH COMMUNITY CENTRE — HALL MANAGER
@@ -363,9 +367,12 @@
    ========================================================================= */
 
 // ---------------------------------------------------------------------
-// 1. CONFIG — edit these for your own Firebase project & security keys
+// 1. CONFIG — Firebase details now live in the separate mullagh-config.js file
+// (window.__mhm_cfg), same pattern as workshop.js in Workshop Stock Control.
+// Falls back to this placeholder if that file is missing, so the app still boots
+// in Local Demo Mode rather than breaking.
 // ---------------------------------------------------------------------
-const firebaseConfig = {
+const firebaseConfig = window.__mhm_cfg || {
   apiKey: "YOUR_API_KEY",
   authDomain: "YOUR_PROJECT.firebaseapp.com",
   databaseURL: "https://YOUR_PROJECT-default-rtdb.europe-west1.firebasedatabase.app",
@@ -381,7 +388,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 107;
+const APP_REVISION = 108;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -3233,9 +3240,33 @@ function renderDashboard(){
 }
 
 // ---------------------------------------------------------------------
+// 8z. UPDATE CHECK — notice a newer Rev has been uploaded to GitHub and offer a refresh
+// ---------------------------------------------------------------------
+function showNewVersionBanner(latestRev){
+  if(document.getElementById('newVersionBanner')) return;
+  const div = document.createElement('div');
+  div.id = 'newVersionBanner';
+  div.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:var(--green-700);color:#fff;padding:10px 16px;text-align:center;font-size:13.5px;box-shadow:var(--shadow);';
+  div.innerHTML = `A newer version of the app is ready (Rev ${latestRev}) — <button onclick="location.reload()" style="background:#fff;color:var(--green-700);border:none;border-radius:6px;padding:4px 12px;font-weight:700;cursor:pointer;margin-left:6px;">Refresh now</button> <button onclick="this.parentNode.remove()" title="Dismiss" style="background:none;border:none;color:#fff;cursor:pointer;margin-left:6px;font-size:16px;line-height:1;vertical-align:middle;">×</button>`;
+  document.body.prepend(div);
+}
+function checkForNewerVersion(){
+  try{
+    if(location.protocol!=='http:' && location.protocol!=='https:') return; // skip for local/file testing
+    const url = location.href.split('#')[0].split('?')[0] + '?_v=' + Date.now();
+    fetch(url, { cache:'no-store' }).then(r=>r.text()).then(text=>{
+      const m = text.match(/const APP_REVISION\s*=\s*(\d+)/);
+      if(m){ const latest = parseInt(m[1],10); if(latest > APP_REVISION) showNewVersionBanner(latest); }
+    }).catch(()=>{});
+  }catch(ex){}
+}
+
+// ---------------------------------------------------------------------
 // 9. BOOT
 // ---------------------------------------------------------------------
 initApp();
+setTimeout(checkForNewerVersion, 4000);
+setInterval(checkForNewerVersion, 10*60*1000);
 </script>
 </body>
 </html>

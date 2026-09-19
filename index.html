@@ -124,6 +124,8 @@
   .pill-green{background:var(--green-100);color:var(--green-700);}
   .pill-amber{background:var(--amber-100);color:#7a5710;}
   .pill-red{background:var(--red-100);color:var(--red-600);}
+  .img-dropzone{border:2px dashed var(--gray-300);border-radius:10px;padding:10px;transition:border-color .15s,background .15s;}
+  .img-dropzone.dropzone-active{border-color:var(--green-500);background:var(--green-50);}
   .pill-gray{background:var(--gray-100);color:var(--gray-700);}
   .icon-btn{background:none;border:none;padding:5px;border-radius:6px;color:var(--gray-500);}
   .icon-btn:hover{background:var(--gray-100);color:var(--gray-900);}
@@ -379,7 +381,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 104;
+const APP_REVISION = 107;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -1689,11 +1691,11 @@ function renderFinance(){
         ${FinanceUI.tab==='expenses'?'<button class="btn btn-primary" onclick="openExpenseModal()">+ Record Expense</button>':''}
       </div>
       ${FinanceUI.tab==='payments' ? `
-        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Booking</th><th>Amount</th><th>Method</th><th>Donation</th><th>Notes</th><th></th></tr></thead><tbody>
+        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Booking</th><th>Amount</th><th>Method</th><th>Donation</th><th>Lodged</th><th>Notes</th><th></th></tr></thead><tbody>
           ${payments.length?payments.map(p=>{ const b=get('bookings',p.bookingId); return `<tr>
-            <td>${displayDate(p.paymentDate)}</td><td>${b?escapeHtml(bookingLabel(b)):'<span class="muted">deleted booking</span>'}</td><td>${euro(p.amountPaid)}</td><td>${escapeHtml(p.paymentMethod||'')}</td><td>${p.isDonation?'<span class="pill pill-green">Yes</span>':''}</td><td class="small muted">${escapeHtml(p.notes||'')}</td>
+            <td>${displayDate(p.paymentDate)}</td><td>${b?escapeHtml(bookingLabel(b)):'<span class="muted">deleted booking</span>'}</td><td>${euro(p.amountPaid)}</td><td>${escapeHtml(p.paymentMethod||'')}</td><td>${p.isDonation?'<span class="pill pill-green">Yes</span>':''}</td><td>${paymentLodgeCellHtml(p)}</td><td class="small muted">${escapeHtml(p.notes||'')}</td>
             <td style="white-space:nowrap;"><button class="icon-btn" onclick="openPaymentModal('${p.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('payments','${p.id}','payment')">🗑</button>`:''}</td>
-          </tr>`; }).join(''):'<tr class="empty-row"><td colspan="7">No payments recorded</td></tr>'}
+          </tr>`; }).join(''):'<tr class="empty-row"><td colspan="8">No payments recorded</td></tr>'}
         </tbody></table></div>
       `:''}
       ${FinanceUI.tab==='expenses' ? `
@@ -1718,10 +1720,19 @@ function renderFinance(){
   `;
 }
 
+function paymentLodgeCellHtml(p){
+  if(p.lodgedToAccount){
+    const by = p.lodgedByMemberId ? get('members', p.lodgedByMemberId) : null;
+    return `<span class="pill pill-green">Lodged</span>${by?`<div class="small muted" style="margin-top:2px;">by ${escapeHtml(by.name)}</div>`:''}`;
+  }
+  return `<span class="pill pill-amber">Not yet</span>${p.lodgementNote?`<div class="small muted" style="margin-top:2px;">${escapeHtml(p.lodgementNote)}</div>`:''}`;
+}
 function openPaymentModal(id){
   const p = id?get('payments',id):null;
   const bookings = list('bookings').sort((a,b)=>(b.bookingDate||'').localeCompare(a.bookingDate||''));
+  const members = list('members').sort((a,b)=>a.name.localeCompare(b.name));
   const opt = bookings.map(b=>`<option value="${b.id}" ${p?.bookingId===b.id?'selected':''}>${escapeHtml(bookingLabel(b))} — ${displayDate(b.bookingDate)}</option>`).join('');
+  const lodged = p ? !!p.lodgedToAccount : false;
   Modal.open(id?'Edit Payment':'Record Payment', `
     <div class="field"><label>Booking</label><select id="pBooking">${opt}</select></div>
     <div class="field-row">
@@ -1732,6 +1743,15 @@ function openPaymentModal(id){
       <div class="field"><label>Method</label><select id="pMethod">${['Cash','Cheque','Bank Transfer','Card'].map(m=>`<option ${p?.paymentMethod===m?'selected':''}>${m}</option>`).join('')}</select></div>
       <div class="field"><label style="display:flex;align-items:center;gap:6px;margin-top:26px;"><input type="checkbox" id="pDonation" ${p?.isDonation?'checked':''}> This was a donation</label></div>
     </div>
+    <hr class="divider">
+    <div class="field-row">
+      <div class="field"><label>Lodged by</label><select id="pLodgedBy"><option value="">— not set —</option>${members.map(m=>`<option value="${m.id}" ${p?.lodgedByMemberId===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('') || ''}</select></div>
+      <div class="field"><label style="display:flex;align-items:center;gap:6px;margin-top:26px;"><input type="checkbox" id="pLodged" ${lodged?'checked':''} onchange="document.getElementById('pLodgeNoteWrap').style.display=this.checked?'none':'block'"> Lodged to account</label></div>
+    </div>
+    <div class="field" id="pLodgeNoteWrap" style="${lodged?'display:none;':''}">
+      <label>Not lodged yet — where's the money? (required until it's lodged)</label>
+      <textarea id="pLodgeNote" rows="2" placeholder="e.g. cash still with treasurer, going to the bank Friday">${escapeHtml(p?.lodgementNote||'')}</textarea>
+    </div>
     <div class="field"><label>Notes</label><textarea id="pNotes" rows="2">${escapeHtml(p?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="savePayment('${id||''}')">Save</button>`);
 }
@@ -1739,7 +1759,19 @@ async function savePayment(id){
   const bookingId = document.getElementById('pBooking').value;
   const amountPaid = Number(document.getElementById('pAmount').value);
   if(!bookingId || !amountPaid){ toast('Pick a booking and enter an amount', true); return; }
-  const data = { bookingId, amountPaid, paymentDate:document.getElementById('pDate').value, paymentMethod:document.getElementById('pMethod').value, isDonation:document.getElementById('pDonation').checked, notes:document.getElementById('pNotes').value };
+  const lodgedToAccount = document.getElementById('pLodged').checked;
+  const lodgementNote = document.getElementById('pLodgeNote').value.trim();
+  if(!lodgedToAccount && !lodgementNote){ toast("Add a quick note on where the money is, or tick \"Lodged to account\"", true); return; }
+  const data = {
+    bookingId, amountPaid,
+    paymentDate:document.getElementById('pDate').value,
+    paymentMethod:document.getElementById('pMethod').value,
+    isDonation:document.getElementById('pDonation').checked,
+    lodgedByMemberId: document.getElementById('pLodgedBy').value || null,
+    lodgedToAccount,
+    lodgementNote: lodgedToAccount ? '' : lodgementNote,
+    notes:document.getElementById('pNotes').value
+  };
   if(id) await db.ref('payments/'+id).update(data); else { data.createdAt=nowStamp(); data.createdBy=Session.username; await db.ref('payments').push(data); }
   await logActivity(id?'Edited payment':'Recorded payment', euro(amountPaid));
   Modal.close(); toast('Payment saved');
@@ -1814,19 +1846,42 @@ function renderSetup(){
 }
 
 let _pendingItemImageDataUrl = null;
-async function handleItemImageFile(input, previewId){
-  const file = input.files[0]; if(!file) return;
+async function processItemImageFile(file, previewId){
+  if(!file) return;
+  if(!file.type || !file.type.startsWith('image/')){ toast("That doesn't look like an image file", true); return; }
   try{
     _pendingItemImageDataUrl = await resizeImageToDataUrl(file, 700, 0.75);
-    document.getElementById(previewId).src = _pendingItemImageDataUrl;
-    document.getElementById(previewId).style.display = '';
+    const img = document.getElementById(previewId);
+    img.src = _pendingItemImageDataUrl;
+    img.style.display = '';
   }catch(ex){ toast('Could not read image: '+ex.message, true); }
 }
+async function handleItemImageFile(input, previewId){
+  await processItemImageFile(input.files[0], previewId);
+}
+function handleItemImageDragOver(ev, dropZoneId){
+  ev.preventDefault();
+  const dz = document.getElementById(dropZoneId); if(dz) dz.classList.add('dropzone-active');
+}
+function handleItemImageDragLeave(ev, dropZoneId){
+  const dz = document.getElementById(dropZoneId); if(dz) dz.classList.remove('dropzone-active');
+}
+function handleItemImageDrop(ev, previewId, dropZoneId){
+  ev.preventDefault();
+  const dz = document.getElementById(dropZoneId); if(dz) dz.classList.remove('dropzone-active');
+  const file = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+  processItemImageFile(file, previewId);
+}
 function itemImageFieldHtml(existingUrl, previewId){
+  const dzId = previewId + 'Dropzone';
   return `<div class="field"><label>Photo (optional)</label>
-    <div style="display:flex;align-items:center;gap:12px;">
+    <div id="${dzId}" class="img-dropzone" style="display:flex;align-items:center;gap:12px;"
+         ondragover="handleItemImageDragOver(event,'${dzId}')" ondragleave="handleItemImageDragLeave(event,'${dzId}')" ondrop="handleItemImageDrop(event,'${previewId}','${dzId}')">
       <img id="${previewId}" src="${existingUrl||''}" style="width:96px;height:96px;object-fit:cover;border-radius:8px;background:var(--gray-100);${existingUrl?'':'display:none;'}" onerror="this.style.display='none'">
-      <input type="file" accept="image/*" onchange="handleItemImageFile(this,'${previewId}')">
+      <div>
+        <input type="file" accept="image/*" onchange="handleItemImageFile(this,'${previewId}')">
+        <div class="small muted" style="margin-top:4px;">or drag &amp; drop an image here</div>
+      </div>
     </div>
   </div>`;
 }
@@ -2045,8 +2100,47 @@ function renderRota(){
     ${list('rotas').sort((a,b)=>a.name.localeCompare(b.name)).map(renderRotaCard).join('') || '<div class="card"><p class="muted small" style="text-align:center;padding:20px;">No rotas yet — add one to start scheduling who\'s on duty each week.</p></div>'}
   `;
 }
+let _rotaLookAhead = {};
+let _rotaSearchTerm = {};
+const ROTA_LOOKAHEAD_OPTIONS = [6, 12, 26, 52];
+const ROTA_SEARCH_POOL_SIZE = 104; // wide enough to search ~2 years ahead (weekly), more for slower frequencies
+function rotaOccurrenceRowsHtml(r, occs){
+  return occs.length
+    ? occs.map(o=>`<tr><td>${displayDate(o.date)}</td><td>${weekdayName(o.date)}</td><td><strong>${escapeHtml(rotaSlotLabel(r,o.slotIndex))}</strong></td></tr>`).join('')
+    : '<tr class="empty-row"><td colspan="3">No matches found — try a different name or date.</td></tr>';
+}
+function rotaFilteredOccurrences(r, count, searchTerm){
+  const term = (searchTerm||'').trim().toLowerCase();
+  if(!term) return rotaUpcomingDates(r, count);
+  const pool = rotaUpcomingDates(r, Math.max(count, ROTA_SEARCH_POOL_SIZE));
+  const matches = pool.filter(o=>{
+    const label = rotaSlotLabel(r, o.slotIndex).toLowerCase();
+    const dateDisplay = displayDate(o.date).toLowerCase();
+    const dayName = weekdayName(o.date).toLowerCase();
+    return label.includes(term) || dateDisplay.includes(term) || o.date.includes(term) || dayName.includes(term);
+  });
+  return matches.slice(0, count);
+}
+function setRotaLookAhead(id, val){
+  _rotaLookAhead[id] = parseInt(val, 10) || 6;
+  refreshRotaCardTable(id);
+}
+function setRotaSearch(id, val){
+  _rotaSearchTerm[id] = val;
+  refreshRotaCardTable(id);
+}
+function refreshRotaCardTable(id){
+  const r = get('rotas', id);
+  const tbody = document.getElementById('rotaTableBody-'+id);
+  if(!r || !tbody) return;
+  const lookAhead = _rotaLookAhead[id] || 6;
+  const searchTerm = _rotaSearchTerm[id] || '';
+  tbody.innerHTML = rotaOccurrenceRowsHtml(r, rotaFilteredOccurrences(r, lookAhead, searchTerm));
+}
 function renderRotaCard(r){
-  const occs = rotaUpcomingDates(r, 6);
+  const lookAhead = _rotaLookAhead[r.id] || 6;
+  const searchTerm = _rotaSearchTerm[r.id] || '';
+  const occs = rotaFilteredOccurrences(r, lookAhead, searchTerm);
   const group = r.linkedGroupId ? get('groups', r.linkedGroupId) : null;
   const canDelete = Session.role==='admin';
   return `<div class="card">
@@ -2060,8 +2154,18 @@ function renderRotaCard(r){
         ${canDelete?`<button class="icon-btn danger" onclick="deleteRota('${r.id}')">🗑</button>`:''}
       </div>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Day</th><th>On duty</th></tr></thead><tbody>
-      ${occs.map(o=>`<tr><td>${displayDate(o.date)}</td><td>${weekdayName(o.date)}</td><td><strong>${escapeHtml(rotaSlotLabel(r,o.slotIndex))}</strong></td></tr>`).join('')}
+    <div class="field-row" style="margin:4px 0 12px;align-items:flex-end;">
+      <div class="field" style="max-width:150px;"><label class="small muted">Look ahead</label>
+        <select onchange="setRotaLookAhead('${r.id}', this.value)">
+          ${ROTA_LOOKAHEAD_OPTIONS.map(n=>`<option value="${n}" ${lookAhead==n?'selected':''}>Next ${n}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field" style="flex:1;min-width:180px;"><label class="small muted">Search by name or date</label>
+        <input type="text" placeholder="e.g. Vera, or 21/09/2026" value="${escapeHtml(searchTerm)}" oninput="setRotaSearch('${r.id}', this.value)">
+      </div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Day</th><th>On duty</th></tr></thead><tbody id="rotaTableBody-${r.id}">
+      ${rotaOccurrenceRowsHtml(r, occs)}
     </tbody></table></div>
   </div>`;
 }
@@ -2451,12 +2555,14 @@ function renderInventoryLoans(){
     <div class="card">
       <div class="toolbar"><h3 class="section-title" style="margin:0;">Inventory</h3><button class="btn btn-primary" onclick="openEquipmentItemModal()">+ Add Item</button></div>
       <p class="section-desc" style="margin-top:-10px;">Add a "Tea Making Service" or similar item here too — anything with a hire rate shows up as an option on the booking form.</p>
-      <div class="table-wrap"><table><thead><tr><th></th><th>Item</th><th>Hire rate</th><th>Total qty</th><th>On loan</th><th>Available</th><th>Notes</th><th></th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th></th><th>Item</th><th>Hire rate</th><th>Total qty</th><th>On loan</th><th>Available</th><th>Replace cost</th><th>Notes</th><th></th></tr></thead><tbody>
         ${items.length?items.map(it=>{ const onLoan=loanedQtyFor(it.id); return `<tr>
           <td>${it.imageDataUrl?`<img src="${it.imageDataUrl}" style="width:88px;height:88px;object-fit:cover;border-radius:8px;">`:'<span class="muted small">—</span>'}</td>
-          <td>${escapeHtml(it.name)}</td><td>${it.hireRate?euro(it.hireRate):'<span class="muted small">—</span>'}</td><td>${it.totalQuantity||0}</td><td>${onLoan}</td><td>${(it.totalQuantity||0)-onLoan}</td><td class="small muted">${escapeHtml(it.notes||'')}</td>
+          <td>${escapeHtml(it.name)}</td><td>${it.hireRate?euro(it.hireRate):'<span class="muted small">—</span>'}</td><td>${it.totalQuantity||0}</td><td>${onLoan}</td><td>${(it.totalQuantity||0)-onLoan}</td>
+          <td>${it.replacementCost?euro(it.replacementCost):'<span class="muted small">—</span>'}${it.purchaseSource?`<div class="small muted" style="margin-top:2px;">from ${escapeHtml(it.purchaseSource)}</div>`:''}</td>
+          <td class="small muted">${escapeHtml(it.notes||'')}</td>
           <td style="white-space:nowrap;"><button class="icon-btn" onclick="openEquipmentItemModal('${it.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('equipmentItems','${it.id}','item')">🗑</button>`:''}</td>
-        </tr>`; }).join(''):'<tr class="empty-row"><td colspan="8">No equipment items yet — add chairs, tables, boiler, cups, plates, etc.</td></tr>'}
+        </tr>`; }).join(''):'<tr class="empty-row"><td colspan="9">No equipment items yet — add chairs, tables, boiler, cups, plates, etc.</td></tr>'}
       </tbody></table></div>
     </div>
     <div class="card">
@@ -2496,6 +2602,10 @@ function openEquipmentItemModal(id){
       <div class="field"><label>Total quantity owned</label><input type="number" id="eqQty" value="${it?.totalQuantity ?? 0}"></div>
       <div class="field"><label>Hire rate (optional, €)</label><input type="number" step="0.01" id="eqHireRate" value="${it?.hireRate ?? ''}" placeholder="e.g. 0.50 per chair"></div>
     </div>
+    <div class="field-row">
+      <div class="field"><label>Cost to replace (optional, €)</label><input type="number" step="0.01" id="eqReplaceCost" value="${it?.replacementCost ?? ''}" placeholder="e.g. 25.00 each"></div>
+      <div class="field"><label>Where bought (optional, if known)</label><input type="text" id="eqSource" value="${escapeHtml(it?.purchaseSource||'')}" placeholder="e.g. Woodie's, local supplier"></div>
+    </div>
     ${itemImageFieldHtml(it?.imageDataUrl, 'eqImagePreview')}
     <div class="field"><label>Notes</label><input type="text" id="eqNotes" value="${escapeHtml(it?.notes||'')}"></div>
   `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveEquipmentItem('${id||''}')">Save</button>`);
@@ -2503,19 +2613,33 @@ function openEquipmentItemModal(id){
 async function saveEquipmentItem(id){
   const name = document.getElementById('eqName').value.trim();
   if(!name){ toast('Item name required', true); return; }
-  const data = { name, totalQuantity:Number(document.getElementById('eqQty').value)||0, hireRate:Number(document.getElementById('eqHireRate').value)||0, notes:document.getElementById('eqNotes').value };
+  const data = { name, totalQuantity:Number(document.getElementById('eqQty').value)||0, hireRate:Number(document.getElementById('eqHireRate').value)||0, replacementCost:Number(document.getElementById('eqReplaceCost').value)||0, purchaseSource:document.getElementById('eqSource').value.trim(), notes:document.getElementById('eqNotes').value };
   if(_pendingItemImageDataUrl) data.imageDataUrl = _pendingItemImageDataUrl;
   if(id) await db.ref('equipmentItems/'+id).update(data); else await db.ref('equipmentItems').push(data);
   await logActivity(id?'Edited equipment item':'Added equipment item', name);
   Modal.close(); toast('Item saved');
 }
+function loanReplaceCostHintHtml(item, qty){
+  if(!item || !item.replacementCost) return '';
+  const total = item.replacementCost * (qty||1);
+  return `Replacement cost: ${euro(item.replacementCost)} each${qty>1?` · ${euro(total)} for ${qty}`:''}${item.purchaseSource?` (from ${escapeHtml(item.purchaseSource)})`:''} — worth knowing if it comes back damaged or missing.`;
+}
+function updateLoanReplaceCostHint(){
+  const item = get('equipmentItems', document.getElementById('loanItem').value);
+  const qty = Number(document.getElementById('loanQty').value)||1;
+  const hint = document.getElementById('loanReplaceCostHint');
+  if(hint) hint.innerHTML = loanReplaceCostHintHtml(item, qty);
+}
 function openEquipmentLoanModal(id){
   const l = id?get('equipmentLoans',id):null;
   const items = list('equipmentItems').sort((a,b)=>a.name.localeCompare(b.name));
+  const initialItem = l ? get('equipmentItems', l.equipmentItemId) : items[0];
   Modal.open(id?'Edit Loan':'Record Loan', `
-    <div class="field"><label>Item</label><select id="loanItem">${items.map(it=>`<option value="${it.id}" ${l?.equipmentItemId===it.id?'selected':''}>${escapeHtml(it.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Item</label><select id="loanItem" onchange="updateLoanReplaceCostHint()">${items.map(it=>`<option value="${it.id}" ${l?.equipmentItemId===it.id?'selected':''}>${escapeHtml(it.name)}</option>`).join('')}</select>
+      <div id="loanReplaceCostHint" class="small muted" style="margin-top:4px;">${loanReplaceCostHintHtml(initialItem, l?.quantity ?? 1)}</div>
+    </div>
     <div class="field-row">
-      <div class="field"><label>Quantity</label><input type="number" id="loanQty" value="${l?.quantity ?? 1}"></div>
+      <div class="field"><label>Quantity</label><input type="number" id="loanQty" value="${l?.quantity ?? 1}" oninput="updateLoanReplaceCostHint()"></div>
       <div class="field"><label>Loan date</label><input type="date" id="loanDate" value="${l?.loanDate||todayIso()}"></div>
     </div>
     <div class="field-row">

@@ -299,6 +299,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><circle cx="12" cy="16" r="1.3"/></svg>
       Door &amp; Lock Codes
     </div>
+    <div class="nav-item" data-tab="volunteers" onclick="Nav.go('volunteers')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-9.5-9A5 5 0 0 1 12 6a5 5 0 0 1 9.5 6c-2.5 4.5-9.5 9-9.5 9Z"/></svg>
+      Volunteers &amp; Sponsors
+    </div>
     <div class="nav-item" data-tab="settings" onclick="Nav.go('settings')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
       Settings
@@ -344,6 +348,7 @@
       <section class="tab-panel" id="panel-energy"></section>
       <section class="tab-panel" id="panel-equipment"></section>
       <section class="tab-panel" id="panel-doorcodes"></section>
+      <section class="tab-panel" id="panel-volunteers"></section>
       <!-- SETTINGS -->
       <section class="tab-panel" id="panel-settings"></section>
 
@@ -388,7 +393,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 110;
+const APP_REVISION = 111;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -707,6 +712,9 @@ function initApp(){
   bindCollection('equipmentLoans');
   bindCollection('maintenanceItems');
   bindCollection('doorCodes');
+  bindCollection('volunteerGroups');
+  bindCollection('volunteers');
+  bindCollection('sponsors');
   bindCollection('presence');
   setInterval(()=>{ renderTopbarControls(); if(Nav.current==='dashboard') renderDashboard(); }, 30000);
   db.ref('config').on('value', snap=>{ State.config = snap.val() || {}; injectLogos(); if(Nav.current) Nav.render(Nav.current); });
@@ -903,7 +911,7 @@ document.getElementById('loginForm').addEventListener('submit', async e=>{
 // ---------------------------------------------------------------------
 // 5. NAV
 // ---------------------------------------------------------------------
-const TAB_TITLES = { dashboard:'Dashboard', bookings:'Bookings', groups:'Groups & Members', finance:'Payments & Expenses', setup:'Setup', history:'History', rota:'Rota', gallery:'Gallery', energy:'Energy', equipment:'Equipment', doorcodes:'Door & Lock Codes', settings:'Settings' };
+const TAB_TITLES = { dashboard:'Dashboard', bookings:'Bookings', groups:'Groups & Members', finance:'Payments & Expenses', setup:'Setup', history:'History', rota:'Rota', gallery:'Gallery', energy:'Energy', equipment:'Equipment', doorcodes:'Door & Lock Codes', volunteers:'Volunteers & Sponsors', settings:'Settings' };
 const Nav = {
   current: null,
   go(tab){
@@ -928,6 +936,7 @@ const Nav = {
     else if(tab==='energy') renderEnergy();
     else if(tab==='equipment') renderEquipment();
     else if(tab==='doorcodes') renderDoorCodes();
+    else if(tab==='volunteers') renderVolunteers();
     else if(tab==='settings') renderSettings();
   }
 };
@@ -999,8 +1008,7 @@ function printBookingSummary(id){
   } else if(room && Number(room.hireRate)){
     costLines.push([room.name+' hire', Number(room.hireRate)]);
   }
-  if(eventType && eventType.chargingMethod==='Free / No Charge') costLines.push([eventType.name+' — Free (no charge)', 0]);
-  else if(eventType && Number(eventType.standardRate)) costLines.push([eventType.name+' ('+eventType.chargingMethod+')', Number(eventType.standardRate)]);
+  eventTypeCostLines(eventType, b).forEach(([label,amt])=>costLines.push([label,amt]));
 
   const body = `
     <table class="print-table">
@@ -1389,7 +1397,17 @@ function openBookingModal(id){
       <div class="field"><label>Group / Booked by</label><select id="fGroup" onchange="handleGroupSelectChange(this)">${opt(groups, b?.groupId, g=>g.name)}<option value="__new__">+ Add new group…</option></select></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Event type</label><select id="fEventType" onchange="const et=get('eventTypes',this.value); document.getElementById('fRateHint').textContent = et?(et.chargingMethod==='Free / No Charge'?'Free — no charge':'Standard rate: '+euro(et.standardRate)+' ('+et.chargingMethod+')'):''; updateBookingCostEstimate();">${opt(eventTypes, b?.eventTypeId, e=>e.name)}</select><div class="small muted" id="fRateHint" style="margin-top:4px;"></div></div>
+      <div class="field"><label>Event type</label><select id="fEventType" onchange="handleEventTypeChange()">${opt(eventTypes, b?.eventTypeId, e=>e.name)}</select><div class="small muted" id="fRateHint" style="margin-top:4px;"></div></div>
+    </div>
+    <div id="fHeadcountWrap" style="display:none;">
+      <div class="field-row">
+        <div class="field"><label>Adults</label><input type="number" min="0" id="fHcAdults" value="${b?.headcountAdults ?? 0}" oninput="updateBookingCostEstimate()"></div>
+        <div class="field"><label>Children</label><input type="number" min="0" id="fHcChildren" value="${b?.headcountChildren ?? 0}" oninput="updateBookingCostEstimate()"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Senior Citizens</label><input type="number" min="0" id="fHcSeniors" value="${b?.headcountSeniors ?? 0}" oninput="updateBookingCostEstimate()"></div>
+        <div class="field"><label>Families (charged at the flat family rate)</label><input type="number" min="0" id="fHcFamilies" value="${b?.headcountFamilies ?? 0}" oninput="updateBookingCostEstimate()"></div>
+      </div>
     </div>
     <div class="field-row">
       <div class="field"><label>Date (first / only occurrence)</label><input type="date" id="fDate" value="${b?.bookingDate||todayIso()}"></div>
@@ -1426,6 +1444,18 @@ function openBookingModal(id){
   updateRoomPreview();
   updateBookingCostEstimate();
 }
+function handleEventTypeChange(){
+  const et = get('eventTypes', document.getElementById('fEventType').value);
+  const hint = document.getElementById('fRateHint');
+  if(et){
+    if(et.chargingMethod==='Free / No Charge') hint.textContent = 'Free — no charge';
+    else if(et.chargingMethod===PER_CATEGORY_METHOD) hint.textContent = 'Adult '+euro(et.adultRate||0)+' · Child '+euro(et.childRate||0)+' · Senior '+euro(et.seniorRate||0)+' · Family '+euro(et.familyRate||0);
+    else hint.textContent = 'Standard rate: '+euro(et.standardRate)+' ('+et.chargingMethod+')';
+  } else hint.textContent = '';
+  const wrap = document.getElementById('fHeadcountWrap');
+  if(wrap) wrap.style.display = (et && et.chargingMethod===PER_CATEGORY_METHOD) ? 'block' : 'none';
+  updateBookingCostEstimate();
+}
 function updateRoomPreview(){
   const img = document.getElementById('fRoomPreview');
   if(!img) return;
@@ -1449,25 +1479,15 @@ function computeBookingCostBreakdown(){
   }
   const etId = document.getElementById('fEventType').value;
   const et = etId ? get('eventTypes', etId) : null;
-  if(et && et.chargingMethod==='Free / No Charge'){
-    lines.push([et.name+' — Free (no charge)', 0]);
-  } else if(et && Number(et.standardRate)){
-    if(et.chargingMethod==='Per Hour'){
-      const start = document.getElementById('fStart').value, end = document.getElementById('fEnd').value;
-      let hours = 0;
-      if(start && end){
-        const [sh,sm] = start.split(':').map(Number), [eh,em] = end.split(':').map(Number);
-        hours = ((eh*60+em)-(sh*60+sm))/60;
-        if(hours<0) hours += 24;
-      }
-      const amt = Number(et.standardRate) * hours;
-      lines.push([et.name+' ('+hours.toFixed(2)+'h @ '+euro(et.standardRate)+'/hr)', amt]);
-      total += amt;
-    } else {
-      lines.push([et.name+' ('+et.chargingMethod+')', Number(et.standardRate)]);
-      total += Number(et.standardRate);
-    }
-  }
+  const etCtx = {
+    startTime: document.getElementById('fStart').value,
+    endTime: document.getElementById('fEnd').value,
+    headcountAdults: document.getElementById('fHcAdults') ? document.getElementById('fHcAdults').value : 0,
+    headcountChildren: document.getElementById('fHcChildren') ? document.getElementById('fHcChildren').value : 0,
+    headcountSeniors: document.getElementById('fHcSeniors') ? document.getElementById('fHcSeniors').value : 0,
+    headcountFamilies: document.getElementById('fHcFamilies') ? document.getElementById('fHcFamilies').value : 0
+  };
+  eventTypeCostLines(et, etCtx).forEach(([label,amt])=>{ lines.push([label,amt]); total += amt; });
   document.querySelectorAll('#fEquipmentList [data-role="equip-qty"]').forEach(inp=>{
     const qty = Number(inp.value)||0;
     const rate = Number(inp.dataset.rate)||0;
@@ -1518,6 +1538,10 @@ async function saveBookingForm(id){
     isWholeComplex,
     groupId: group,
     eventTypeId: document.getElementById('fEventType').value || null,
+    headcountAdults: Number(document.getElementById('fHcAdults')?.value)||0,
+    headcountChildren: Number(document.getElementById('fHcChildren')?.value)||0,
+    headcountSeniors: Number(document.getElementById('fHcSeniors')?.value)||0,
+    headcountFamilies: Number(document.getElementById('fHcFamilies')?.value)||0,
     equipmentSelections,
     estimatedCost,
     bookingDate: document.getElementById('fDate').value,
@@ -1859,7 +1883,7 @@ function renderSetup(){
       <div class="card-title">Event Types &amp; Standard Rates <button class="btn btn-primary btn-sm" onclick="openEventTypeModal()">+ Add Event Type</button></div>
       <div class="table-wrap"><table><thead><tr><th>Name</th><th>Charging method</th><th>Standard rate</th><th>Notes</th><th></th></tr></thead><tbody>
         ${eventTypes.length?eventTypes.map(e=>`<tr>
-          <td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.chargingMethod||'')}</td><td>${e.chargingMethod==='Free / No Charge'?'<span class="pill pill-green">Free</span>':euro(e.standardRate)}</td><td class="small muted">${escapeHtml(e.notes||'')}</td>
+          <td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.chargingMethod||'')}</td><td>${eventTypeRateSummaryHtml(e)}</td><td class="small muted">${escapeHtml(e.notes||'')}</td>
           <td style="white-space:nowrap;"><button class="icon-btn" onclick="openEventTypeModal('${e.id}')">✎</button><button class="icon-btn danger" onclick="deleteRecord('eventTypes','${e.id}','event type')">🗑</button></td>
         </tr>`).join(''):'<tr class="empty-row"><td colspan="5">No event types yet</td></tr>'}
       </tbody></table></div>
@@ -1949,25 +1973,98 @@ async function saveRoom(id){
   Modal.close(); toast('Room saved');
 }
 
-const EVENT_CHARGING_METHODS = ['Per Table','Per Hour','Per Day','Per 6 Week Block','Donation','Flat Rate','Free / No Charge'];
+const PER_CATEGORY_METHOD = 'Per Person (Adult/Child/Senior/Family)';
+const EVENT_CHARGING_METHODS = ['Per Table','Per Hour','Per Day','Per 6 Week Block','Donation','Flat Rate','Free / No Charge', PER_CATEGORY_METHOD];
+function computeHoursBetween(start, end){
+  if(!start || !end) return 0;
+  const [sh,sm] = start.split(':').map(Number), [eh,em] = end.split(':').map(Number);
+  let hours = ((eh*60+em)-(sh*60+sm))/60;
+  if(hours<0) hours += 24;
+  return hours;
+}
+// Shared cost-line logic for an event type, used by both the live booking-form estimate and the
+// printed booking summary — ctx just needs startTime/endTime and the four headcount fields.
+function eventTypeCostLines(et, ctx){
+  if(!et) return [];
+  if(et.chargingMethod==='Free / No Charge') return [[et.name+' — Free (no charge)', 0]];
+  if(et.chargingMethod===PER_CATEGORY_METHOD){
+    const cats = [
+      ['headcountAdults','adultRate','Adults'],
+      ['headcountChildren','childRate','Children'],
+      ['headcountSeniors','seniorRate','Senior Citizens'],
+      ['headcountFamilies','familyRate','Families']
+    ];
+    const lines = [];
+    cats.forEach(([countKey,rateKey,label])=>{
+      const count = Number(ctx[countKey])||0;
+      const rate = Number(et[rateKey])||0;
+      if(count>0 && rate>0) lines.push([et.name+' — '+label+' ('+count+' × '+euro(rate)+')', count*rate]);
+    });
+    return lines;
+  }
+  if(!Number(et.standardRate)) return [];
+  if(et.chargingMethod==='Per Hour'){
+    const hours = computeHoursBetween(ctx.startTime, ctx.endTime);
+    return [[et.name+' ('+hours.toFixed(2)+'h @ '+euro(et.standardRate)+'/hr)', Number(et.standardRate)*hours]];
+  }
+  return [[et.name+' ('+et.chargingMethod+')', Number(et.standardRate)]];
+}
+function eventTypeRateSummaryHtml(e){
+  if(e.chargingMethod==='Free / No Charge') return '<span class="pill pill-green">Free</span>';
+  if(e.chargingMethod===PER_CATEGORY_METHOD){
+    const parts = [];
+    if(Number(e.adultRate)) parts.push('Adult '+euro(e.adultRate));
+    if(Number(e.childRate)) parts.push('Child '+euro(e.childRate));
+    if(Number(e.seniorRate)) parts.push('Senior '+euro(e.seniorRate));
+    if(Number(e.familyRate)) parts.push('Family '+euro(e.familyRate));
+    return parts.length ? `<div class="small">${parts.join('<br>')}</div>` : '<span class="muted small">No rates set</span>';
+  }
+  return euro(e.standardRate);
+}
 function openEventTypeModal(id){
   const e = id?get('eventTypes',id):null;
   const isFree = e?.chargingMethod==='Free / No Charge';
+  const isPerCategory = e?.chargingMethod===PER_CATEGORY_METHOD;
   Modal.open(id?'Edit Event Type':'Add Event Type', `
-    <div class="field"><label>Name</label><input type="text" id="etName" value="${escapeHtml(e?.name||'')}" placeholder="e.g. Community Event, Charity Fundraiser, Card Night"></div>
+    <div class="field"><label>Name</label><input type="text" id="etName" value="${escapeHtml(e?.name||'')}" placeholder="e.g. Community Event, Spooky Walk, Santa Visit"></div>
     <div class="field-row">
-      <div class="field"><label>Charging method</label><select id="etMethod" onchange="document.getElementById('etRateWrap').style.display=(this.value==='Free / No Charge')?'none':'block'">${EVENT_CHARGING_METHODS.map(m=>`<option ${e?.chargingMethod===m?'selected':''}>${m}</option>`).join('')}</select></div>
-      <div class="field" id="etRateWrap" style="display:${isFree?'none':'block'};"><label>Standard rate (€)</label><input type="number" step="0.01" id="etRate" value="${e?.standardRate ?? 0}"></div>
+      <div class="field"><label>Charging method</label><select id="etMethod" onchange="handleEventTypeMethodChange()">${EVENT_CHARGING_METHODS.map(m=>`<option ${e?.chargingMethod===m?'selected':''}>${m}</option>`).join('')}</select></div>
+      <div class="field" id="etRateWrap" style="display:${(isFree||isPerCategory)?'none':'block'};"><label>Standard rate (€)</label><input type="number" step="0.01" id="etRate" value="${e?.standardRate ?? 0}"></div>
     </div>
-    <p class="small muted" style="margin-top:-8px;">Use "Free / No Charge" for community events, fundraisers or charity cake sales where the hall doesn't charge the group a room fee — it'll show clearly as Free on the booking rather than just a €0.00 rate.</p>
+    <div id="etCategoryRatesWrap" style="display:${isPerCategory?'block':'none'};">
+      <p class="small muted" style="margin-top:-4px;">Set a rate for whichever categories apply and leave the rest at 0 — e.g. leave Family at 0 if this event only ever charges per person.</p>
+      <div class="field-row">
+        <div class="field"><label>Adult rate (€)</label><input type="number" step="0.01" id="etAdultRate" value="${e?.adultRate ?? 0}"></div>
+        <div class="field"><label>Child rate (€)</label><input type="number" step="0.01" id="etChildRate" value="${e?.childRate ?? 0}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Senior citizen rate (€)</label><input type="number" step="0.01" id="etSeniorRate" value="${e?.seniorRate ?? 0}"></div>
+        <div class="field"><label>Family rate (€, flat)</label><input type="number" step="0.01" id="etFamilyRate" value="${e?.familyRate ?? 0}"></div>
+      </div>
+    </div>
+    <p class="small muted" style="margin-top:-8px;">Use "Free / No Charge" for community events, fundraisers or charity cake sales where the hall doesn't charge the group a room fee. Use "${PER_CATEGORY_METHOD}" for something like a Spooky Walk or a Santa visit, where adults, children, senior citizens or whole families each pay a different amount.</p>
     <div class="field"><label>Notes</label><textarea id="etNotes" rows="2">${escapeHtml(e?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveEventType('${id||''}')">Save</button>`);
+}
+function handleEventTypeMethodChange(){
+  const method = document.getElementById('etMethod').value;
+  document.getElementById('etRateWrap').style.display = (method==='Free / No Charge'||method===PER_CATEGORY_METHOD) ? 'none' : 'block';
+  document.getElementById('etCategoryRatesWrap').style.display = (method===PER_CATEGORY_METHOD) ? 'block' : 'none';
 }
 async function saveEventType(id){
   const name = document.getElementById('etName').value.trim();
   if(!name){ toast('Name required', true); return; }
   const chargingMethod = document.getElementById('etMethod').value;
-  const data = { name, chargingMethod, standardRate: chargingMethod==='Free / No Charge' ? 0 : (Number(document.getElementById('etRate').value)||0), notes:document.getElementById('etNotes').value };
+  const isPerCategory = chargingMethod===PER_CATEGORY_METHOD;
+  const data = {
+    name, chargingMethod,
+    standardRate: (chargingMethod==='Free / No Charge' || isPerCategory) ? 0 : (Number(document.getElementById('etRate').value)||0),
+    adultRate: isPerCategory ? (Number(document.getElementById('etAdultRate').value)||0) : 0,
+    childRate: isPerCategory ? (Number(document.getElementById('etChildRate').value)||0) : 0,
+    seniorRate: isPerCategory ? (Number(document.getElementById('etSeniorRate').value)||0) : 0,
+    familyRate: isPerCategory ? (Number(document.getElementById('etFamilyRate').value)||0) : 0,
+    notes:document.getElementById('etNotes').value
+  };
   if(id) await db.ref('eventTypes/'+id).update(data); else await db.ref('eventTypes').push(data);
   await logActivity(id?'Edited event type':'Added event type', name);
   Modal.close(); toast('Event type saved');
@@ -2817,6 +2914,166 @@ async function saveDoorCode(id){
 }
 
 // ---------------------------------------------------------------------
+// 7f6. VOLUNTEERS & SPONSORS
+// ---------------------------------------------------------------------
+const VolunteersUI = { tab: 'groups' };
+function renderVolunteers(){
+  document.getElementById('panel-volunteers').innerHTML = `
+    <div class="chip-filter" style="margin-bottom:16px;">
+      <div class="chip ${VolunteersUI.tab==='groups'?'active':''}" onclick="VolunteersUI.tab='groups';renderVolunteers()">Volunteers</div>
+      <div class="chip ${VolunteersUI.tab==='sponsors'?'active':''}" onclick="VolunteersUI.tab='sponsors';renderVolunteers()">Sponsors</div>
+    </div>
+    ${VolunteersUI.tab==='groups' ? renderVolunteerGroupsHtml() : renderSponsorsHtml()}
+  `;
+}
+function renderVolunteerGroupsHtml(){
+  const canDelete = Session.role==='admin';
+  const groups = list('volunteerGroups').sort((a,b)=>a.name.localeCompare(b.name));
+  const allVolunteers = list('volunteers');
+  const cardsHtml = groups.length ? groups.map(g=>{
+    const coordinator = g.coordinatorMemberId ? get('members', g.coordinatorMemberId) : null;
+    const vols = allVolunteers.filter(v=>v.groupId===g.id).sort((a,b)=>a.name.localeCompare(b.name));
+    const volRows = vols.length ? vols.map(v=>`
+      <tr>
+        <td>${escapeHtml(v.name)}</td>
+        <td>${escapeHtml(v.phone||'')}</td>
+        <td class="small muted">${escapeHtml(v.note||'')}</td>
+        <td style="white-space:nowrap;">
+          ${v.phone?`<button class="icon-btn" title="WhatsApp" onclick="Notify.openWhatsApp('${v.phone}', '')">💬</button>`:''}
+          ${v.email?`<button class="icon-btn" title="Email" onclick="openContactEmailModal('${v.email}', ${JSON.stringify(v.name)})">✉</button>`:''}
+          <button class="icon-btn" onclick="openVolunteerModal('${v.id}')">✎</button>
+          ${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('volunteers','${v.id}','volunteer')">🗑</button>`:''}
+        </td>
+      </tr>`).join('') : '<tr class="empty-row"><td colspan="4">No volunteers added yet</td></tr>';
+    return `
+      <div class="card">
+        <div class="toolbar">
+          <div>
+            <div class="card-title" style="margin-bottom:2px;">${escapeHtml(g.name)}</div>
+            <div class="small muted">${coordinator?'Coordinator: '+escapeHtml(coordinator.name):'No coordinator set'}</div>
+          </div>
+          <div style="white-space:nowrap;">
+            <button class="btn btn-secondary btn-sm" onclick="openVolunteerModal(null,'${g.id}')">+ Add Volunteer</button>
+            <button class="icon-btn" onclick="openVolunteerGroupModal('${g.id}')">✎</button>
+            ${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('volunteerGroups','${g.id}','volunteer group')">🗑</button>`:''}
+          </div>
+        </div>
+        ${g.notes?`<p class="small muted" style="margin-top:-6px;">${escapeHtml(g.notes)}</p>`:''}
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Phone</th><th>Note</th><th></th></tr></thead><tbody>${volRows}</tbody></table></div>
+      </div>`;
+  }).join('') : '<div class="card"><p class="muted small">No volunteer groups yet — add one for Coffee Morning, Tractor Run, Spooky Walk, Car Park Supervisor, Traffic Coordinator, or whatever you need. Volunteers stay on the list year to year so you can just come back and contact the same people next time.</p></div>';
+  return `
+    <div class="toolbar" style="margin-bottom:12px;"><button class="btn btn-primary" onclick="openVolunteerGroupModal()">+ Add Volunteer Group</button></div>
+    ${cardsHtml}
+  `;
+}
+function openVolunteerGroupModal(id){
+  const g = id?get('volunteerGroups',id):null;
+  const members = list('members').sort((a,b)=>a.name.localeCompare(b.name));
+  Modal.open(id?'Edit Volunteer Group':'Add Volunteer Group', `
+    <div class="field"><label>Name</label><input type="text" id="vgName" value="${escapeHtml(g?.name||'')}" placeholder="e.g. Coffee Morning, Tractor Run, Spooky Walk, Car Park Supervisor, Traffic Coordinator"></div>
+    <div class="field"><label>Coordinator (full-time committee member in charge, optional)</label><select id="vgCoordinator"><option value="">— none —</option>${members.map(m=>`<option value="${m.id}" ${g?.coordinatorMemberId===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Notes</label><textarea id="vgNotes" rows="2">${escapeHtml(g?.notes||'')}</textarea></div>
+  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveVolunteerGroup('${id||''}')">Save</button>`);
+}
+async function saveVolunteerGroup(id){
+  const name = document.getElementById('vgName').value.trim();
+  if(!name){ toast('Name required', true); return; }
+  const data = { name, coordinatorMemberId: document.getElementById('vgCoordinator').value||null, notes: document.getElementById('vgNotes').value };
+  if(id) await db.ref('volunteerGroups/'+id).update(data); else await db.ref('volunteerGroups').push(data);
+  await logActivity(id?'Edited volunteer group':'Added volunteer group', name);
+  Modal.close(); toast('Volunteer group saved');
+}
+function openVolunteerModal(id, groupId){
+  const v = id?get('volunteers',id):null;
+  const groups = list('volunteerGroups').sort((a,b)=>a.name.localeCompare(b.name));
+  const selectedGroupId = v ? v.groupId : groupId;
+  Modal.open(id?'Edit Volunteer':'Add Volunteer', `
+    <div class="field"><label>Volunteer group</label><select id="volGroup">${groups.length?groups.map(g=>`<option value="${g.id}" ${selectedGroupId===g.id?'selected':''}>${escapeHtml(g.name)}</option>`).join(''):'<option value="">Add a volunteer group first</option>'}</select></div>
+    <div class="field"><label>Name</label><input type="text" id="volName" value="${escapeHtml(v?.name||'')}"></div>
+    <div class="field-row">
+      <div class="field"><label>Phone</label><input type="text" id="volPhone" value="${escapeHtml(v?.phone||'')}"></div>
+      <div class="field"><label>Email (optional)</label><input type="email" id="volEmail" value="${escapeHtml(v?.email||'')}"></div>
+    </div>
+    <div class="field"><label>Note (e.g. what they like doing)</label><input type="text" id="volNote" value="${escapeHtml(v?.note||'')}" placeholder="e.g. likes doing the washing up, good with collecting money"></div>
+  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveVolunteer('${id||''}')">Save</button>`);
+}
+async function saveVolunteer(id){
+  const name = document.getElementById('volName').value.trim();
+  if(!name){ toast('Name required', true); return; }
+  const groupId = document.getElementById('volGroup').value;
+  if(!groupId){ toast('Add a volunteer group first', true); return; }
+  const data = { name, groupId, phone:document.getElementById('volPhone').value.trim(), email:document.getElementById('volEmail').value.trim(), note:document.getElementById('volNote').value.trim() };
+  if(id) await db.ref('volunteers/'+id).update(data); else await db.ref('volunteers').push(data);
+  await logActivity(id?'Edited volunteer':'Added volunteer', name);
+  Modal.close(); toast('Volunteer saved');
+}
+function renderSponsorsHtml(){
+  const canDelete = Session.role==='admin';
+  const sponsors = list('sponsors').sort((a,b)=>a.name.localeCompare(b.name));
+  return `
+    <div class="card">
+      <div class="toolbar"><h3 class="section-title" style="margin:0;">Sponsors</h3><button class="btn btn-primary" onclick="openSponsorModal()">+ Add Sponsor</button></div>
+      <p class="section-desc" style="margin-top:-10px;">Local businesses and supporters — Spain's Bus, White's Shop, and so on — kept in one place from year to year.</p>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Email</th><th>Notes</th><th></th></tr></thead><tbody>
+        ${sponsors.length?sponsors.map(s=>`<tr>
+          <td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.contactName||'')}</td><td>${escapeHtml(s.phone||'')}</td><td>${escapeHtml(s.email||'')}</td><td class="small muted">${escapeHtml(s.notes||'')}</td>
+          <td style="white-space:nowrap;">
+            ${s.phone?`<button class="icon-btn" title="WhatsApp" onclick="Notify.openWhatsApp('${s.phone}', '')">💬</button>`:''}
+            ${s.email?`<button class="icon-btn" title="Email" onclick="openContactEmailModal('${s.email}', ${JSON.stringify(s.name)})">✉</button>`:''}
+            <button class="icon-btn" onclick="openSponsorModal('${s.id}')">✎</button>
+            ${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('sponsors','${s.id}','sponsor')">🗑</button>`:''}
+          </td>
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="6">No sponsors yet</td></tr>'}
+      </tbody></table></div>
+    </div>
+  `;
+}
+function openSponsorModal(id){
+  const s = id?get('sponsors',id):null;
+  Modal.open(id?'Edit Sponsor':'Add Sponsor', `
+    <div class="field"><label>Business / sponsor name</label><input type="text" id="spName" value="${escapeHtml(s?.name||'')}" placeholder="e.g. Spain's Bus, White's Shop"></div>
+    <div class="field"><label>Contact person (optional)</label><input type="text" id="spContact" value="${escapeHtml(s?.contactName||'')}"></div>
+    <div class="field-row">
+      <div class="field"><label>Phone</label><input type="text" id="spPhone" value="${escapeHtml(s?.phone||'')}"></div>
+      <div class="field"><label>Email</label><input type="email" id="spEmail" value="${escapeHtml(s?.email||'')}"></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="spNotes" rows="2">${escapeHtml(s?.notes||'')}</textarea></div>
+  `,`<button class="btn btn-secondary" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="saveSponsor('${id||''}')">Save</button>`);
+}
+async function saveSponsor(id){
+  const name = document.getElementById('spName').value.trim();
+  if(!name){ toast('Business/sponsor name required', true); return; }
+  const data = { name, contactName:document.getElementById('spContact').value.trim(), phone:document.getElementById('spPhone').value.trim(), email:document.getElementById('spEmail').value.trim(), notes:document.getElementById('spNotes').value };
+  if(id) await db.ref('sponsors/'+id).update(data); else await db.ref('sponsors').push(data);
+  await logActivity(id?'Edited sponsor':'Added sponsor', name);
+  Modal.close(); toast('Sponsor saved');
+}
+// Generic "email this person" modal, reused for Volunteers and Sponsors — always offers a plain
+// mailto (works with no setup) and, when EmailJS is configured in Settings, an automatic send too.
+function openContactEmailModal(toEmail, toName){
+  const c = notifyConfig();
+  const hallName = (State.config&&State.config.hallName) || 'Community Centre';
+  const subject = `Message from ${hallName}`;
+  const body = `Hi ${toName||''},\n\n\n\nThanks,\n${hallName}`;
+  Modal.open('Email '+(toName||''), `
+    <div class="field"><label>To</label><input type="text" value="${escapeHtml(toEmail||'')}" disabled></div>
+    <div class="field"><label>Subject</label><input type="text" id="ceSubject" value="${escapeHtml(subject)}"></div>
+    <div class="field"><label>Message</label><textarea id="ceBody" rows="8" style="width:100%;font-size:12.5px;padding:8px;border:1px solid var(--gray-300);border-radius:8px;">${escapeHtml(body)}</textarea></div>
+  `, `
+    <button class="btn btn-secondary" onclick="Modal.close()">Cancel</button>
+    <button class="btn btn-secondary" onclick="Notify.openMailto('${toEmail}', document.getElementById('ceSubject').value, document.getElementById('ceBody').value)">Send via Email</button>
+    ${c.emailAutoEnabled?`<button class="btn btn-primary" onclick="sendContactEmailNow('${toEmail}')">Send Automatically Now</button>`:''}
+  `, true);
+}
+async function sendContactEmailNow(toEmail){
+  const subject = document.getElementById('ceSubject').value;
+  const body = document.getElementById('ceBody').value;
+  try{ await Notify.sendEmailAuto(toEmail, subject, body); toast('Sent automatically'); Modal.close(); }
+  catch(ex){ toast(ex.message, true); }
+}
+
+// ---------------------------------------------------------------------
 // 7g. SETTINGS
 // ---------------------------------------------------------------------
 let _pendingLogoDataUrl = null;
@@ -3159,7 +3416,7 @@ function triggerRestoreFilePicker(){
   if(Session.role!=='admin'){ toast('Only an Admin can restore a backup', true); return; }
   document.getElementById('restoreFileInput').click();
 }
-const RESTORABLE_BACKUP_KEYS = ['rooms','eventTypes','taskTemplates','groups','members','bookings','payments','expenses','activityLog','gallery','rotas','energyReadings','equipmentItems','equipmentLoans','maintenanceItems','doorCodes','config'];
+const RESTORABLE_BACKUP_KEYS = ['rooms','eventTypes','taskTemplates','groups','members','bookings','payments','expenses','activityLog','gallery','rotas','energyReadings','equipmentItems','equipmentLoans','maintenanceItems','doorCodes','volunteerGroups','volunteers','sponsors','config'];
 async function handleRestoreFile(input){
   const file = input.files[0];
   input.value = ''; // so picking the same file again still fires a change event

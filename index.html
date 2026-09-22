@@ -303,6 +303,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-9.5-9A5 5 0 0 1 12 6a5 5 0 0 1 9.5 6c-2.5 4.5-9.5 9-9.5 9Z"/></svg>
       Volunteers &amp; Sponsors
     </div>
+    <div class="nav-item" data-tab="aed" onclick="Nav.go('aed')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
+      AED &amp; Safety
+    </div>
     <div class="nav-item" data-tab="settings" onclick="Nav.go('settings')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
       Settings
@@ -349,6 +353,7 @@
       <section class="tab-panel" id="panel-equipment"></section>
       <section class="tab-panel" id="panel-doorcodes"></section>
       <section class="tab-panel" id="panel-volunteers"></section>
+      <section class="tab-panel" id="panel-aed"></section>
       <!-- SETTINGS -->
       <section class="tab-panel" id="panel-settings"></section>
 
@@ -393,7 +398,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 113;
+const APP_REVISION = 116;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -715,6 +720,10 @@ function initApp(){
   bindCollection('volunteerGroups');
   bindCollection('volunteers');
   bindCollection('sponsors');
+  bindCollection('aedChecks');
+  bindCollection('aedCodes');
+  bindCollection('firstAidChecks');
+  bindCollection('emergencyContacts');
   bindCollection('presence');
   setInterval(()=>{ renderTopbarControls(); if(Nav.current==='dashboard') renderDashboard(); }, 30000);
   db.ref('config').on('value', snap=>{ State.config = snap.val() || {}; injectLogos(); if(Nav.current) Nav.render(Nav.current); });
@@ -911,7 +920,7 @@ document.getElementById('loginForm').addEventListener('submit', async e=>{
 // ---------------------------------------------------------------------
 // 5. NAV
 // ---------------------------------------------------------------------
-const TAB_TITLES = { dashboard:'Dashboard', bookings:'Bookings', groups:'Groups & Members', finance:'Payments & Expenses', setup:'Setup', history:'History', rota:'Rota', gallery:'Gallery', energy:'Energy', equipment:'Equipment', doorcodes:'Door & Lock Codes', volunteers:'Volunteers & Sponsors', settings:'Settings' };
+const TAB_TITLES = { dashboard:'Dashboard', bookings:'Bookings', groups:'Groups & Members', finance:'Payments & Expenses', setup:'Setup', history:'History', rota:'Rota', gallery:'Gallery', energy:'Energy', equipment:'Equipment', doorcodes:'Door & Lock Codes', volunteers:'Volunteers & Sponsors', aed:'AED & Safety', settings:'Settings' };
 const Nav = {
   current: null,
   go(tab){
@@ -937,6 +946,7 @@ const Nav = {
     else if(tab==='equipment') renderEquipment();
     else if(tab==='doorcodes') renderDoorCodes();
     else if(tab==='volunteers') renderVolunteers();
+    else if(tab==='aed') renderAed();
     else if(tab==='settings') renderSettings();
   }
 };
@@ -3131,6 +3141,278 @@ async function sendContactEmailNow(toEmail){
 }
 
 // ---------------------------------------------------------------------
+// 7f7. AED & SAFETY — AED health checks, AED locations around the parish,
+// first aid kit checks, and emergency contacts
+// ---------------------------------------------------------------------
+const AedUi = { tab: 'checks' };
+function aedCurrentStatus(){
+  const checks = list('aedChecks').sort((a,b)=> b.date.localeCompare(a.date) || ((b.createdAt||0)-(a.createdAt||0)) );
+  const latest = checks[0] || null;
+  if(!latest) return { label:'No health check logged yet', cls:'pill-red', latest:null, daysAgo:null };
+  const daysAgo = Math.round((isoToDate(todayIso()) - isoToDate(latest.date)) / 86400000);
+  const problems = [];
+  if(latest.batteryStatus==='low') problems.push('battery low');
+  if(latest.adultPadsStatus==='expired') problems.push('adult pads expired');
+  if(latest.childPadsStatus==='expired') problems.push('child pads expired');
+  if(problems.length) return { label:'Needs attention: '+problems.join(', '), cls:'pill-red', latest, daysAgo };
+  if(daysAgo > 30) return { label:'Check overdue ('+daysAgo+' days ago)', cls:'pill-red', latest, daysAgo };
+  if(daysAgo > 21) return { label:'Check due soon', cls:'pill-amber', latest, daysAgo };
+  return { label:'All OK', cls:'pill-green', latest, daysAgo };
+}
+function renderAed(){
+  document.getElementById('panel-aed').innerHTML = `
+    <div class="chip-filter" style="margin-bottom:16px;">
+      <div class="chip ${AedUi.tab==='checks'?'active':''}" onclick="AedUi.tab='checks';renderAed()">AED Health Checks</div>
+      <div class="chip ${AedUi.tab==='locations'?'active':''}" onclick="AedUi.tab='locations';renderAed()">AED Locations</div>
+      <div class="chip ${AedUi.tab==='firstaid'?'active':''}" onclick="AedUi.tab='firstaid';renderAed()">First Aid Kit</div>
+      <div class="chip ${AedUi.tab==='contacts'?'active':''}" onclick="AedUi.tab='contacts';renderAed()">Emergency Contacts</div>
+    </div>
+    ${AedUi.tab==='checks' ? renderAedChecksHtml() : AedUi.tab==='locations' ? renderAedCodesHtml() : AedUi.tab==='firstaid' ? renderFirstAidHtml() : renderEmergencyContactsHtml()}
+  `;
+}
+function renderAedChecksHtml(){
+  const canDelete = Session.role==='admin';
+  const status = aedCurrentStatus();
+  const checks = list('aedChecks').sort((a,b)=> b.date.localeCompare(a.date) || ((b.createdAt||0)-(a.createdAt||0)) );
+  const padsLabel = s => s==='ok'?'OK':s==='expired'?'Expired':s==='replaced'?'Replaced':'—';
+  const battLabel = s => s==='ok'?'OK 🔋':s==='low'?'Low 🪫':s==='replaced'?'Replaced':'—';
+  const pillFor = s => (s==='low'||s==='expired') ? 'pill-red' : (s==='ok'||s==='replaced') ? 'pill-green' : 'pill-gray';
+  return `
+    <div class="card">
+      <div class="card-title">AED Status <span class="pill ${status.cls}">${escapeHtml(status.label)}</span></div>
+      ${status.latest
+        ? `<p class="small muted" style="margin-top:-8px;">Last checked ${displayDate(status.latest.date)} (${status.daysAgo} day${status.daysAgo===1?'':'s'} ago)${status.latest.checkedBy?' by '+escapeHtml(status.latest.checkedBy):''}. Checked monthly is recommended — flagged amber after 3 weeks, red after a month or if anything's marked low/expired.</p>`
+        : `<p class="small muted" style="margin-top:-8px;">No health check has been logged yet — add the first one below.</p>`}
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3 class="section-title" style="margin:0;">Health Check Log</h3><button class="btn btn-primary" onclick="openAedCheckModal()">+ Log a Check</button></div>
+      <p class="section-desc" style="margin-top:-10px;">Record the date every time someone checks the AED — battery, adult pads and child/paediatric pads tracked separately. Shows up on the Dashboard's "Needs attention" card if it's overdue or anything's flagged.</p>
+      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Checked by</th><th>Battery</th><th>Adult Pads</th><th>Child Pads</th><th>Notes</th><th></th></tr></thead><tbody>
+        ${checks.length?checks.map(c=>`<tr>
+          <td>${displayDate(c.date)}</td>
+          <td class="small">${escapeHtml(c.checkedBy||'')}</td>
+          <td><span class="pill ${pillFor(c.batteryStatus)}">${battLabel(c.batteryStatus)}</span></td>
+          <td><span class="pill ${pillFor(c.adultPadsStatus)}">${padsLabel(c.adultPadsStatus)}</span></td>
+          <td><span class="pill ${pillFor(c.childPadsStatus)}">${padsLabel(c.childPadsStatus)}</span></td>
+          <td class="small muted">${escapeHtml(c.notes||'')}</td>
+          <td style="white-space:nowrap;"><button class="icon-btn" onclick="openAedCheckModal('${c.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('aedChecks','${c.id}','check')">🗑</button>`:''}</td>
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="7">No checks logged yet</td></tr>'}
+      </tbody></table></div>
+    </div>
+  `;
+}
+function openAedCheckModal(id){
+  const c = id?get('aedChecks',id):null;
+  Modal.open(id?'Edit Health Check':'Log AED Health Check', `
+    <div class="field-row">
+      <div class="field"><label>Date checked</label><input type="date" id="aedDate" value="${c?.date||todayIso()}"></div>
+      <div class="field"><label>Checked by</label><input type="text" id="aedCheckedBy" value="${escapeHtml(c?.checkedBy||'')}"></div>
+    </div>
+    <div class="field"><label>Battery</label><select id="aedBattery">
+      <option value="ok" ${c?.batteryStatus==='ok'?'selected':''}>OK 🔋</option>
+      <option value="low" ${c?.batteryStatus==='low'?'selected':''}>Low — needs replacing 🪫</option>
+      <option value="replaced" ${c?.batteryStatus==='replaced'?'selected':''}>Replaced today</option>
+    </select></div>
+    <div class="field-row">
+      <div class="field"><label>Adult Pads</label><select id="aedAdultPads">
+        <option value="ok" ${c?.adultPadsStatus==='ok'?'selected':''}>OK</option>
+        <option value="expired" ${c?.adultPadsStatus==='expired'?'selected':''}>Expired</option>
+        <option value="replaced" ${c?.adultPadsStatus==='replaced'?'selected':''}>Replaced today</option>
+      </select></div>
+      <div class="field"><label>Child / Paediatric Pads</label><select id="aedChildPads">
+        <option value="ok" ${c?.childPadsStatus==='ok'?'selected':''}>OK</option>
+        <option value="expired" ${c?.childPadsStatus==='expired'?'selected':''}>Expired</option>
+        <option value="replaced" ${c?.childPadsStatus==='replaced'?'selected':''}>Replaced today</option>
+      </select></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="aedNotes" rows="2" placeholder="e.g. pads expiry date, anything to flag">${escapeHtml(c?.notes||'')}</textarea></div>
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveAedCheck('${id||''}')">Save</button>`);
+}
+async function saveAedCheck(id){
+  const date = document.getElementById('aedDate').value;
+  if(!date){ toast('Date is required', true); return; }
+  const data = {
+    date,
+    checkedBy: document.getElementById('aedCheckedBy').value.trim(),
+    batteryStatus: document.getElementById('aedBattery').value,
+    adultPadsStatus: document.getElementById('aedAdultPads').value,
+    childPadsStatus: document.getElementById('aedChildPads').value,
+    notes: document.getElementById('aedNotes').value
+  };
+  if(id) await db.ref('aedChecks/'+id).update(data);
+  else { data.createdAt = Date.now(); await db.ref('aedChecks').push(data); }
+  await logActivity(id?'Edited AED health check':'Logged AED health check', date);
+  Modal.close(); toast('Saved');
+}
+function renderAedCodesHtml(){
+  const canDelete = Session.role==='admin';
+  const codes = list('aedCodes').sort((a,b)=>a.label.localeCompare(b.label));
+  return `
+    <div class="card">
+      <div class="toolbar"><h3 class="section-title" style="margin:0;">AED Locations</h3><button class="btn btn-primary" onclick="openAedCodeModal()">+ Add AED Location</button></div>
+      <p class="section-desc" style="margin-top:-10px;">Every defibrillator worth knowing about around the parish — not just the hall's own — with its Eircode and access code, so anyone can find and get to the nearest one fast in an emergency. Visible to anyone logged in (Admin or Staff), same as Door &amp; Lock Codes.</p>
+      <div class="table-wrap"><table><thead><tr><th></th><th>Location</th><th>Eircode</th><th>Code</th><th>Notes</th><th></th></tr></thead><tbody>
+        ${codes.length?codes.map(c=>`<tr>
+          <td>${c.imageDataUrl?`<img src="${c.imageDataUrl}" style="width:168px;height:168px;object-fit:cover;border-radius:8px;">`:'<span class="muted small">—</span>'}</td>
+          <td>${escapeHtml(c.label)}</td>
+          <td class="small" style="font-family:monospace;">${escapeHtml(c.eircode||'')}</td>
+          <td><strong style="font-family:monospace;font-size:15px;letter-spacing:1px;">${escapeHtml(c.code||'')}</strong></td>
+          <td class="small muted">${escapeHtml(c.notes||'')}</td>
+          <td style="white-space:nowrap;"><button class="icon-btn" onclick="openAedCodeModal('${c.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('aedCodes','${c.id}','AED location')">🗑</button>`:''}</td>
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="6">No AED locations saved yet — start with the hall\'s own.</td></tr>'}
+      </tbody></table></div>
+    </div>
+  `;
+}
+function openAedCodeModal(id){
+  const c = id?get('aedCodes',id):null;
+  _pendingItemImageDataUrl = null;
+  Modal.open(id?'Edit AED Location':'Add AED Location', `
+    <div class="field"><label>Location (e.g. Mullagh Community Centre, Mullagh GAA Club, the local shop)</label><input type="text" id="aedcLabel" value="${escapeHtml(c?.label||'')}"></div>
+    <div class="field-row">
+      <div class="field"><label>Eircode</label><input type="text" id="aedcEircode" placeholder="e.g. H14 X2C1" value="${escapeHtml(c?.eircode||'')}"></div>
+      <div class="field"><label>Access code</label><input type="text" id="aedcCode" placeholder="if known" value="${escapeHtml(c?.code||'')}"></div>
+    </div>
+    ${itemImageFieldHtml(c?.imageDataUrl, 'aedcImagePreview', 168)}
+    <div class="field"><label>Notes</label><textarea id="aedcNotes" rows="2" placeholder="e.g. on the outside wall by the front door, key holder name">${escapeHtml(c?.notes||'')}</textarea></div>
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveAedCode('${id||''}')">Save</button>`);
+}
+async function saveAedCode(id){
+  const label = document.getElementById('aedcLabel').value.trim();
+  if(!label){ toast('Location name is required', true); return; }
+  const data = { label, eircode: document.getElementById('aedcEircode').value.trim(), code: document.getElementById('aedcCode').value.trim(), notes: document.getElementById('aedcNotes').value };
+  if(_pendingItemImageDataUrl) data.imageDataUrl = _pendingItemImageDataUrl;
+  if(id) await db.ref('aedCodes/'+id).update(data); else await db.ref('aedCodes').push(data);
+  await logActivity(id?'Edited AED location':'Added AED location', label);
+  Modal.close(); toast('AED location saved');
+}
+
+// ---------------------------------------------------------------------
+// 7f8. FIRST AID KIT — a simple check log, same shape as the AED health check
+// ---------------------------------------------------------------------
+function firstAidStatus(){
+  const checks = list('firstAidChecks').sort((a,b)=> b.date.localeCompare(a.date) || ((b.createdAt||0)-(a.createdAt||0)) );
+  const latest = checks[0] || null;
+  if(!latest) return { label:'No check logged yet', cls:'pill-red', latest:null, daysAgo:null };
+  const daysAgo = Math.round((isoToDate(todayIso()) - isoToDate(latest.date)) / 86400000);
+  if(latest.status==='restock') return { label:'Needs restocking', cls:'pill-red', latest, daysAgo };
+  if(daysAgo > 30) return { label:'Check overdue ('+daysAgo+' days ago)', cls:'pill-red', latest, daysAgo };
+  if(daysAgo > 21) return { label:'Check due soon', cls:'pill-amber', latest, daysAgo };
+  return { label:'All OK', cls:'pill-green', latest, daysAgo };
+}
+function renderFirstAidHtml(){
+  const canDelete = Session.role==='admin';
+  const status = firstAidStatus();
+  const checks = list('firstAidChecks').sort((a,b)=> b.date.localeCompare(a.date) || ((b.createdAt||0)-(a.createdAt||0)) );
+  const pillFor = s => s==='restock' ? 'pill-red' : 'pill-green';
+  const statusLabel = s => s==='restock' ? 'Needs restocking' : 'OK';
+  return `
+    <div class="card">
+      <div class="card-title">First Aid Kit Status <span class="pill ${status.cls}">${escapeHtml(status.label)}</span></div>
+      ${status.latest
+        ? `<p class="small muted" style="margin-top:-8px;">Last checked ${displayDate(status.latest.date)} (${status.daysAgo} day${status.daysAgo===1?'':'s'} ago)${status.latest.checkedBy?' by '+escapeHtml(status.latest.checkedBy):''}.</p>`
+        : `<p class="small muted" style="margin-top:-8px;">No check has been logged yet — add the first one below.</p>`}
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3 class="section-title" style="margin:0;">First Aid Kit Check Log</h3><button class="btn btn-primary" onclick="openFirstAidCheckModal()">+ Log a Check</button></div>
+      <p class="section-desc" style="margin-top:-10px;">Record the date every time someone checks the first aid kit's contents and expiry dates. Shows on the Dashboard if it's overdue or flagged as needing restocking.</p>
+      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Checked by</th><th>Status</th><th>Notes</th><th></th></tr></thead><tbody>
+        ${checks.length?checks.map(c=>`<tr>
+          <td>${displayDate(c.date)}</td>
+          <td class="small">${escapeHtml(c.checkedBy||'')}</td>
+          <td><span class="pill ${pillFor(c.status)}">${statusLabel(c.status)}</span></td>
+          <td class="small muted">${escapeHtml(c.notes||'')}</td>
+          <td style="white-space:nowrap;"><button class="icon-btn" onclick="openFirstAidCheckModal('${c.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('firstAidChecks','${c.id}','check')">🗑</button>`:''}</td>
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="5">No checks logged yet</td></tr>'}
+      </tbody></table></div>
+    </div>
+  `;
+}
+function openFirstAidCheckModal(id){
+  const c = id?get('firstAidChecks',id):null;
+  Modal.open(id?'Edit Check':'Log First Aid Kit Check', `
+    <div class="field-row">
+      <div class="field"><label>Date checked</label><input type="date" id="faDate" value="${c?.date||todayIso()}"></div>
+      <div class="field"><label>Checked by</label><input type="text" id="faCheckedBy" value="${escapeHtml(c?.checkedBy||'')}"></div>
+    </div>
+    <div class="field"><label>Status</label><select id="faStatus">
+      <option value="ok" ${c?.status!=='restock'?'selected':''}>OK</option>
+      <option value="restock" ${c?.status==='restock'?'selected':''}>Needs restocking</option>
+    </select></div>
+    <div class="field"><label>Notes</label><textarea id="faNotes" rows="2" placeholder="e.g. plasters running low, replaced burn dressing">${escapeHtml(c?.notes||'')}</textarea></div>
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveFirstAidCheck('${id||''}')">Save</button>`);
+}
+async function saveFirstAidCheck(id){
+  const date = document.getElementById('faDate').value;
+  if(!date){ toast('Date is required', true); return; }
+  const data = {
+    date,
+    checkedBy: document.getElementById('faCheckedBy').value.trim(),
+    status: document.getElementById('faStatus').value,
+    notes: document.getElementById('faNotes').value
+  };
+  if(id) await db.ref('firstAidChecks/'+id).update(data);
+  else { data.createdAt = Date.now(); await db.ref('firstAidChecks').push(data); }
+  await logActivity(id?'Edited first aid kit check':'Logged first aid kit check', date);
+  Modal.close(); toast('Saved');
+}
+
+// ---------------------------------------------------------------------
+// 7f9. EMERGENCY CONTACTS — Community First Responder and anyone else worth having on hand
+// ---------------------------------------------------------------------
+function renderEmergencyContactsHtml(){
+  const canDelete = Session.role==='admin';
+  const contacts = list('emergencyContacts').sort((a,b)=>a.name.localeCompare(b.name));
+  return `
+    <div class="card">
+      <div class="toolbar"><h3 class="section-title" style="margin:0;">Emergency Contacts</h3><button class="btn btn-primary" onclick="openEmergencyContactModal()">+ Add Contact</button></div>
+      <p class="section-desc" style="margin-top:-10px;">The Community First Responder for the parish, and anyone else worth having on hand in an emergency.</p>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Notes</th><th></th></tr></thead><tbody>
+        ${contacts.length?contacts.map(c=>`<tr>
+          <td>${escapeHtml(c.name)}</td>
+          <td class="small">${escapeHtml(c.role||'')}</td>
+          <td class="small" style="font-family:monospace;">${escapeHtml(c.phone||'')}</td>
+          <td class="small muted">${escapeHtml(c.notes||'')}</td>
+          <td style="white-space:nowrap;">
+            ${c.phone?`<button class="icon-btn" title="WhatsApp" onclick="Notify.openWhatsApp('${c.phone}', '')">💬</button>`:''}
+            ${c.email?`<button class="icon-btn" title="Email" onclick="openContactEmailModal('${c.email}', '${escapeHtml(c.name)}')">✉</button>`:''}
+            <button class="icon-btn" onclick="openEmergencyContactModal('${c.id}')">✎</button>
+            ${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('emergencyContacts','${c.id}','contact')">🗑</button>`:''}
+          </td>
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="5">No contacts saved yet — start with the Community First Responder.</td></tr>'}
+      </tbody></table></div>
+    </div>
+  `;
+}
+function openEmergencyContactModal(id){
+  const c = id?get('emergencyContacts',id):null;
+  Modal.open(id?'Edit Contact':'Add Emergency Contact', `
+    <div class="field-row">
+      <div class="field"><label>Name</label><input type="text" id="ecName" value="${escapeHtml(c?.name||'')}"></div>
+      <div class="field"><label>Role (e.g. Community First Responder)</label><input type="text" id="ecRole" value="${escapeHtml(c?.role||(id?'':'Community First Responder'))}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Phone</label><input type="text" id="ecPhone" value="${escapeHtml(c?.phone||'')}"></div>
+      <div class="field"><label>Email (optional)</label><input type="email" id="ecEmail" value="${escapeHtml(c?.email||'')}"></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="ecNotes" rows="2" placeholder="e.g. area covered, alternative number">${escapeHtml(c?.notes||'')}</textarea></div>
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveEmergencyContact('${id||''}')">Save</button>`);
+}
+async function saveEmergencyContact(id){
+  const name = document.getElementById('ecName').value.trim();
+  if(!name){ toast('Name is required', true); return; }
+  const data = {
+    name, role: document.getElementById('ecRole').value.trim(),
+    phone: document.getElementById('ecPhone').value.trim(),
+    email: document.getElementById('ecEmail').value.trim(),
+    notes: document.getElementById('ecNotes').value
+  };
+  if(id) await db.ref('emergencyContacts/'+id).update(data); else await db.ref('emergencyContacts').push(data);
+  await logActivity(id?'Edited emergency contact':'Added emergency contact', name);
+  Modal.close(); toast('Contact saved');
+}
+
+// ---------------------------------------------------------------------
 // 7g. SETTINGS
 // ---------------------------------------------------------------------
 let _pendingLogoDataUrl = null;
@@ -3244,6 +3526,7 @@ function renderSettings(){
             <td>${u.isActive===false?'<span class="pill pill-red">Disabled</span>':'<span class="pill pill-green">Active</span>'}</td>
             <td class="small muted">${u.createdAt?displayDate(u.createdAt.slice(0,10)):''}</td>
             <td style="white-space:nowrap;">
+              <button class="btn btn-secondary btn-sm" onclick="openEditUserModal('${u.id}')">Edit</button>
               <button class="btn btn-secondary btn-sm" onclick="openResetPasswordModal('${u.id}','${escapeHtml(u.username)}')">Reset Password</button>
               ${!isSelf?`<button class="btn btn-secondary btn-sm" onclick="toggleUserActive('${u.id}', ${u.isActive===false})">${u.isActive===false?'Enable':'Disable'}</button>
               <button class="icon-btn danger" onclick="deleteUserAccount('${u.id}','${escapeHtml(u.username)}')">🗑</button>`:' <span class="small muted">this is you</span>'}
@@ -3348,6 +3631,42 @@ async function saveNewUser(){
   await logActivity('Created user', username+' ('+role+')');
   Modal.close(); toast('User created');
 }
+function openEditUserModal(id){
+  if(Session.role!=='admin'){ toast('Only an Admin can do that', true); return; }
+  const u = get('users', id);
+  if(!u){ toast('User not found', true); return; }
+  const requireKey = State.config.requireAdminPromotionKey !== false;
+  Modal.open('Edit User — '+u.username, `
+    <div class="field"><label>Username</label><input type="text" id="euUsername" value="${escapeHtml(u.username)}"></div>
+    <div class="field"><label>Role</label><select id="euRole" onchange="document.getElementById('euAdminKeyField').style.display=(this.value==='admin' && this.value!=='${u.role}' && ${requireKey})?'block':'none'">
+      <option value="staff" ${u.role==='staff'?'selected':''}>Staff</option>
+      <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+    </select></div>
+    <div class="field" id="euAdminKeyField" style="display:none;"><label>Admin promotion key</label><input type="password" id="euAdminKey"></div>
+    <p class="small muted" style="margin-top:-6px;">To change this user's password, use "Reset Password" on the Users list instead.</p>
+  `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveEditUser('${id}')">Save Changes</button>`);
+}
+async function saveEditUser(id){
+  if(Session.role!=='admin'){ toast('Only an Admin can do that', true); return; }
+  const target = get('users', id);
+  if(!target){ toast('User not found', true); return; }
+  const username = document.getElementById('euUsername').value.trim();
+  const role = document.getElementById('euRole').value;
+  if(!username){ toast('Enter a username', true); return; }
+  if(list('users').some(u=>u.id!==id && u.username.toLowerCase()===username.toLowerCase())){ toast('That username already exists', true); return; }
+  if(target.role==='admin' && role!=='admin'){
+    const admins = list('users').filter(u=>u.role==='admin' && u.isActive!==false);
+    if(admins.length<=1){ toast('Cannot remove Admin from the last active Admin', true); return; }
+    if(id===Session.uid){ toast("You can't remove your own Admin rights", true); return; }
+  }
+  if(role==='admin' && target.role!=='admin' && State.config.requireAdminPromotionKey!==false){
+    const key = document.getElementById('euAdminKey').value;
+    if(key !== ADMIN_PROMOTION_KEY){ toast('Admin promotion key is incorrect', true); return; }
+  }
+  await db.ref('users/'+id).update({ username, role });
+  await logActivity('Edited user', target.username + (target.username!==username?' → '+username:'') + ' ('+role+')');
+  Modal.close(); toast('User updated');
+}
 async function saveRequireAdminKeySetting(checked){
   await db.ref('config').update({ requireAdminPromotionKey: checked });
   await logActivity('Updated setting', 'Require admin promotion key: '+(checked?'on':'off'));
@@ -3391,7 +3710,7 @@ async function deleteUserAccount(id, username){
 function downloadBackup(){
   // Everything except `users` (login credentials never leave the app this way) and
   // `presence` (just live who's-online data, meaningless in a backup).
-  const data = { rooms:State.rooms, eventTypes:State.eventTypes, taskTemplates:State.taskTemplates, groups:State.groups, members:State.members, bookings:State.bookings, payments:State.payments, expenses:State.expenses, activityLog:State.activityLog, gallery:State.gallery, rotas:State.rotas, energyReadings:State.energyReadings, equipmentItems:State.equipmentItems, equipmentLoans:State.equipmentLoans, maintenanceItems:State.maintenanceItems, doorCodes:State.doorCodes, config:State.config, exportedAt: nowStamp() };
+  const data = { rooms:State.rooms, eventTypes:State.eventTypes, taskTemplates:State.taskTemplates, groups:State.groups, members:State.members, bookings:State.bookings, payments:State.payments, expenses:State.expenses, activityLog:State.activityLog, gallery:State.gallery, rotas:State.rotas, energyReadings:State.energyReadings, equipmentItems:State.equipmentItems, equipmentLoans:State.equipmentLoans, maintenanceItems:State.maintenanceItems, doorCodes:State.doorCodes, volunteerGroups:State.volunteerGroups, volunteers:State.volunteers, sponsors:State.sponsors, aedChecks:State.aedChecks, aedCodes:State.aedCodes, firstAidChecks:State.firstAidChecks, emergencyContacts:State.emergencyContacts, config:State.config, exportedAt: nowStamp() };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -3473,7 +3792,7 @@ function triggerRestoreFilePicker(){
   if(Session.role!=='admin'){ toast('Only an Admin can restore a backup', true); return; }
   document.getElementById('restoreFileInput').click();
 }
-const RESTORABLE_BACKUP_KEYS = ['rooms','eventTypes','taskTemplates','groups','members','bookings','payments','expenses','activityLog','gallery','rotas','energyReadings','equipmentItems','equipmentLoans','maintenanceItems','doorCodes','volunteerGroups','volunteers','sponsors','config'];
+const RESTORABLE_BACKUP_KEYS = ['rooms','eventTypes','taskTemplates','groups','members','bookings','payments','expenses','activityLog','gallery','rotas','energyReadings','equipmentItems','equipmentLoans','maintenanceItems','doorCodes','volunteerGroups','volunteers','sponsors','aedChecks','aedCodes','firstAidChecks','emergencyContacts','config'];
 async function handleRestoreFile(input){
   const file = input.files[0];
   input.value = ''; // so picking the same file again still fires a change event
@@ -3527,7 +3846,11 @@ function renderDashboard(){
 
   const overdueMaintenance = list('maintenanceItems').map(m=>({...m, status:maintenanceStatus(m)})).filter(m=>m.status.label==='Overdue' || m.status.label==='Due soon').sort((a,b)=>(a.status.nextDue||'').localeCompare(b.status.nextDue||''));
   const overdueLoans = list('equipmentLoans').filter(l=>!l.returnedDate && l.dueReturnDate && l.dueReturnDate<today).sort((a,b)=>(a.dueReturnDate||'').localeCompare(b.dueReturnDate||''));
-  const needsAttentionCount = overdueMaintenance.filter(m=>m.status.label==='Overdue').length + overdueLoans.length;
+  const aedStatus = aedCurrentStatus();
+  const aedNeedsAttention = aedStatus.cls !== 'pill-green';
+  const faStatus = firstAidStatus();
+  const faNeedsAttention = faStatus.cls !== 'pill-green';
+  const needsAttentionCount = overdueMaintenance.filter(m=>m.status.label==='Overdue').length + overdueLoans.length + (aedStatus.cls==='pill-red'?1:0) + (faStatus.cls==='pill-red'?1:0);
 
   document.getElementById('panel-dashboard').innerHTML = `
     <div class="welcome-banner">
@@ -3536,10 +3859,12 @@ function renderDashboard(){
         <div><h2>${escapeHtml((State.config&&State.config.hallName)||'Community Centre')}</h2><p>Welcome back, ${escapeHtml(Session.username)} · ${displayDate(today)} · ${revisionLineHtml()}${(State.config&&State.config.hallEmail)?` · ✉ ${escapeHtml(State.config.hallEmail)}`:''}${(State.config&&State.config.hallEircode)?` · 📍 ${escapeHtml(State.config.hallEircode)}`:''}</p></div>
       </div>
     </div>
-    ${(overdueMaintenance.length || overdueLoans.length) ? `
+    ${(overdueMaintenance.length || overdueLoans.length || aedNeedsAttention || faNeedsAttention) ? `
     <div class="card" style="border-left:4px solid ${needsAttentionCount?'var(--red-500,#dc2626)':'var(--amber-500,#d97706)'};">
       <div class="card-title">⚠ Needs attention${needsAttentionCount?` <span class="pill pill-red">${needsAttentionCount}</span>`:''}</div>
       <div class="table-wrap"><table><thead><tr><th>Item</th><th>What</th><th>Due</th><th>Status</th></tr></thead><tbody>
+        ${aedNeedsAttention?`<tr><td>AED</td><td>${aedStatus.latest?'Health check':'No health check logged'}</td><td>${aedStatus.latest?displayDate(aedStatus.latest.date):'—'}</td><td><span class="pill ${aedStatus.cls}">${escapeHtml(aedStatus.label)}</span></td></tr>`:''}
+        ${faNeedsAttention?`<tr><td>First Aid Kit</td><td>${faStatus.latest?'Check':'No check logged'}</td><td>${faStatus.latest?displayDate(faStatus.latest.date):'—'}</td><td><span class="pill ${faStatus.cls}">${escapeHtml(faStatus.label)}</span></td></tr>`:''}
         ${overdueMaintenance.map(m=>`<tr><td>${escapeHtml(m.name)}</td><td>${m.type==='refill'?'Gas refill':'Service'} due</td><td>${m.status.nextDue?displayDate(m.status.nextDue):'—'}</td><td><span class="pill ${m.status.cls}">${m.status.label}</span></td></tr>`).join('')}
         ${overdueLoans.map(l=>{ const item=get('equipmentItems', l.equipmentItemId); return `<tr><td>${escapeHtml(item?item.name:'Equipment')}</td><td>On loan to ${escapeHtml(l.borrowerName||'—')} (qty ${l.quantity||1})</td><td>${displayDate(l.dueReturnDate)}</td><td><span class="pill pill-red">Overdue return</span></td></tr>`; }).join('')}
       </tbody></table></div>

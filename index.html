@@ -412,7 +412,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 122;
+const APP_REVISION = 123;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -1531,10 +1531,13 @@ function renderAvailabilityGrid(weekStartIso){
       if(getOccurrenceDates(b, dateIso, dateIso).length){
         const tag = b.isWholeComplex ? ' <span class="pill pill-amber" style="font-size:9px;padding:1px 5px;">Whole complex</span>' : '';
         const times = occurrenceTimesFor(b, dateIso);
-        entries.push(`${times.startTime||''}-${times.endTime||''}<br><span class="muted">${escapeHtml(get('groups',b.groupId)?.name||'')}</span>${tag}`);
+        entries.push({ start: times.startTime||'', html: `${times.startTime||''}-${times.endTime||''}<br><span class="muted">${escapeHtml(get('groups',b.groupId)?.name||'')}</span>${tag}` });
       }
     }
-    return entries.join('<hr style="margin:4px 0;border:none;border-top:1px solid var(--gray-300);">');
+    // Morning-to-evening order within the day, not just whichever order the bookings happen to
+    // have been created in.
+    entries.sort((a,c)=>a.start.localeCompare(c.start));
+    return entries.map(e=>e.html).join('<hr style="margin:4px 0;border:none;border-top:1px solid var(--gray-300);">');
   };
   let html = '<div class="avail-grid">';
   html += '<div class="avail-cell head">Room</div>' + days.map(d=>`<div class="avail-cell head">${weekdayName(d).slice(0,3)}<br>${displayDate(d).slice(0,5)}</div>`).join('');

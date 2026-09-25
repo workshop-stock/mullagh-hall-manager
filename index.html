@@ -412,7 +412,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 121;
+const APP_REVISION = 122;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -1087,6 +1087,14 @@ function printBookingSummary(id){
 // ---------------------------------------------------------------------
 // 7. RECURRENCE / OCCURRENCES
 // ---------------------------------------------------------------------
+// A paused period fully hides any occurrence date inside it (inclusive of both ends) — for
+// pausing a recurring booking over a funeral, a holiday closure, etc. without ending the series.
+// Can be a single day (start===end) or span several days/weeks.
+function isDatePaused(booking, iso){
+  if(!booking.pausedRanges || !booking.pausedRanges.length) return false;
+  const d = isoToDate(iso);
+  return booking.pausedRanges.some(p => p.start && p.end && d>=isoToDate(p.start) && d<=isoToDate(p.end));
+}
 function getOccurrenceDates(booking, rangeStartIso, rangeEndIso){
   const dates = [];
   const rangeStart = isoToDate(rangeStartIso);
@@ -1094,7 +1102,7 @@ function getOccurrenceDates(booking, rangeStartIso, rangeEndIso){
   const start = isoToDate(booking.bookingDate);
   if(!booking.isRecurring){
     if(start>=rangeStart && start<=rangeEnd) dates.push(booking.bookingDate);
-    return dates;
+    return dates.filter(iso=>!isDatePaused(booking, iso));
   }
   // Irregular: no fixed cadence — just the first-occurrence date plus whatever extra dates
   // were entered by hand, each with its own time (see occurrenceTimesFor).
@@ -1103,7 +1111,7 @@ function getOccurrenceDates(booking, rangeStartIso, rangeEndIso){
       const d = isoToDate(iso);
       if(d>=rangeStart && d<=rangeEnd) dates.push(iso);
     });
-    return dates;
+    return dates.filter(iso=>!isDatePaused(booking, iso));
   }
   const seriesEnd = booking.recurrenceEndDate ? isoToDate(booking.recurrenceEndDate) : rangeEnd;
   let cur = start;
@@ -1116,7 +1124,7 @@ function getOccurrenceDates(booking, rangeStartIso, rangeEndIso){
     else break;
     safety++;
   }
-  return dates;
+  return dates.filter(iso=>!isDatePaused(booking, iso));
 }
 function nextOccurrence(booking, fromIso){
   const dates = getOccurrenceDates(booking, fromIso, dateToIso(addYears(isoToDate(fromIso),5)));
@@ -1470,13 +1478,14 @@ function renderBookings(){
           const canApproveThis = approvalOn && bookingEffectiveStatus(b)==='pending' && sessionCanApprove();
           const groupForRow = get('groups', b.groupId);
           const occTimes = b.isRecurring && b.recurrenceType==='Irregular' && b.nextOcc ? occurrenceTimesFor(b, b.nextOcc) : {startTime:b.startTime, endTime:b.endTime};
+          const activePause = (b.pausedRanges||[]).find(p=>p.end>=today);
           return `<tr>
             <td>${b.nextOcc?displayDate(b.nextOcc):'<span class="muted">series ended</span>'}</td>
             <td>${b.isWholeComplex?'<span class="pill pill-amber">Whole Complex</span>':escapeHtml(get('rooms',b.roomId)?.name||'—')}</td>
             <td>${escapeHtml(groupForRow?.name||'—')}</td>
             <td>${escapeHtml(eventTypeName(b.eventTypeId))}</td>
             <td>${occTimes.startTime||''}–${occTimes.endTime||''}${b.isRecurring && b.recurrenceType==='Irregular'?' <span class="small muted" title="Times can vary by date on an Irregular booking">(varies)</span>':''}</td>
-            <td>${b.isRecurring?`<span class="pill pill-green">${escapeHtml(b.recurrenceType)}</span>`:'<span class="pill pill-gray">One-off</span>'}</td>
+            <td>${b.isRecurring?`<span class="pill pill-green">${escapeHtml(b.recurrenceType)}</span>`:'<span class="pill pill-gray">One-off</span>'}${activePause?` <span class="pill pill-amber" title="Paused ${displayDate(activePause.start)} – ${displayDate(activePause.end)}${activePause.reason?': '+escapeHtml(activePause.reason):''}">⏸ Paused</span>`:''}</td>
             ${approvalOn?`<td>${bookingStatusPillHtml(b)}</td>`:''}
             <td>${bookingInsurancePillHtml(b, groupForRow)}</td>
             <td>${taskEntries.length? `${done}/${taskEntries.length}` : '<span class="muted">—</span>'}</td>
@@ -1512,16 +1521,20 @@ function renderAvailabilityGrid(weekStartIso){
   if(!rooms.length) return '<p class="muted small">Add rooms in the Setup tab first.</p>';
   const days = [...Array(7)].map((_,i)=>dateToIso(addDays(isoToDate(weekStartIso), i)));
   const bookingsList = list('bookings');
+  // Shows EVERY booking that lands on this room/day, not just the first one found — a room can
+  // easily have a morning booking and a separate evening booking on the same day, and hiding the
+  // second one behind the first (the old behaviour) meant it looked like nothing was on at all.
   const cellFor = (roomId, dateIso) => {
+    const entries = [];
     for(const b of bookingsList){
       if(!b.isWholeComplex && b.roomId!==roomId) continue;
       if(getOccurrenceDates(b, dateIso, dateIso).length){
         const tag = b.isWholeComplex ? ' <span class="pill pill-amber" style="font-size:9px;padding:1px 5px;">Whole complex</span>' : '';
         const times = occurrenceTimesFor(b, dateIso);
-        return `${times.startTime||''}-${times.endTime||''}<br><span class="muted">${escapeHtml(get('groups',b.groupId)?.name||'')}</span>${tag}`;
+        entries.push(`${times.startTime||''}-${times.endTime||''}<br><span class="muted">${escapeHtml(get('groups',b.groupId)?.name||'')}</span>${tag}`);
       }
     }
-    return '';
+    return entries.join('<hr style="margin:4px 0;border:none;border-top:1px solid var(--gray-300);">');
   };
   let html = '<div class="avail-grid">';
   html += '<div class="avail-cell head">Room</div>' + days.map(d=>`<div class="avail-cell head">${weekdayName(d).slice(0,3)}<br>${displayDate(d).slice(0,5)}</div>`).join('');
@@ -1633,9 +1646,9 @@ function openBookingModal(id){
     <div class="field-row">
       <div class="field">
         <label>Room</label>
-        <select id="fRoom" ${b?.isWholeComplex?'disabled':''} onchange="updateRoomPreview();updateBookingCostEstimate();">${opt(rooms, b?.roomId, r=>r.name)}</select>
+        <select id="fRoom" ${b?.isWholeComplex?'disabled':''} onchange="updateRoomPreview();updateBookingCostEstimate();refreshRoomDayPreview();">${opt(rooms, b?.roomId, r=>r.name)}</select>
         <img id="fRoomPreview" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;margin-top:6px;display:none;">
-        <label class="small" style="display:flex;align-items:center;gap:5px;margin-top:6px;"><input type="checkbox" id="fWholeComplex" ${b?.isWholeComplex?'checked':''} onchange="document.getElementById('fRoom').disabled=this.checked;updateRoomPreview();updateBookingCostEstimate();"> Book the whole complex (all rooms)</label>
+        <label class="small" style="display:flex;align-items:center;gap:5px;margin-top:6px;"><input type="checkbox" id="fWholeComplex" ${b?.isWholeComplex?'checked':''} onchange="document.getElementById('fRoom').disabled=this.checked;updateRoomPreview();updateBookingCostEstimate();refreshRoomDayPreview();"> Book the whole complex (all rooms)</label>
       </div>
       <div class="field"><label>Group / Booked by</label><select id="fGroup" onchange="handleGroupSelectChange(this)">${opt(groups, b?.groupId, g=>g.name)}<option value="__new__">+ Add new group…</option></select></div>
     </div>
@@ -1653,25 +1666,26 @@ function openBookingModal(id){
       </div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Date (first / only occurrence)</label><input type="date" id="fDate" value="${b?.bookingDate||todayIso()}"></div>
-      <div class="field"><label>Start time</label><input type="time" id="fStart" value="${b?.startTime||'19:00'}" onchange="updateBookingCostEstimate()"></div>
-      <div class="field"><label>End time</label><input type="time" id="fEnd" value="${b?.endTime||'21:00'}" onchange="updateBookingCostEstimate()"></div>
+      <div class="field"><label>Date (first / only occurrence)</label><input type="date" id="fDate" value="${b?.bookingDate||todayIso()}" onchange="refreshRoomDayPreview()"></div>
+      <div class="field"><label>Start time</label><input type="time" id="fStart" value="${b?.startTime||'19:00'}" onchange="updateBookingCostEstimate();refreshRoomDayPreview();"></div>
+      <div class="field"><label>End time</label><input type="time" id="fEnd" value="${b?.endTime||'21:00'}" onchange="updateBookingCostEstimate();refreshRoomDayPreview();"></div>
     </div>
+    <div id="fRoomDayPreview" data-editing-id="${id||''}"></div>
     <div class="field-row">
       <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="fKitchen" ${b?.kitchenRequired?'checked':''}> Kitchen required</label></div>
       <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="fHeating" ${b?.heatingRequired?'checked':''}> Heating required</label></div>
       <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="fRegular" ${b?.isRegular?'checked':''}> Regular booking</label></div>
     </div>
     <hr class="divider">
-    <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="fRecurring" ${b?.isRecurring?'checked':''} onchange="document.getElementById('fRecurringOpts').style.display=this.checked?'flex':'none'"> This is a recurring booking</label></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="fRecurring" ${b?.isRecurring?'checked':''} onchange="document.getElementById('fRecurringOpts').style.display=this.checked?'flex':'none'; const pw=document.getElementById('fPausedWrap'); if(pw) pw.style.display=this.checked?'block':'none'; refreshRoomDayPreview();"> This is a recurring booking</label></div>
     <div class="field-row" id="fRecurringOpts" style="display:${b?.isRecurring?'flex':'none'};">
-      <div class="field"><label>Repeats</label><select id="fRecurType" onchange="handleRecurTypeChange()">
+      <div class="field"><label>Repeats</label><select id="fRecurType" onchange="handleRecurTypeChange();refreshRoomDayPreview();">
         <option value="Weekly" ${b?.recurrenceType==='Weekly'?'selected':''}>Weekly</option>
         <option value="Monthly" ${b?.recurrenceType==='Monthly'?'selected':''}>Monthly</option>
         <option value="Yearly" ${b?.recurrenceType==='Yearly'?'selected':''}>Yearly</option>
         <option value="Irregular" ${b?.recurrenceType==='Irregular'?'selected':''}>Irregular (pick specific dates)</option>
       </select></div>
-      <div class="field" id="fRecurUntilWrap" style="display:${b?.recurrenceType==='Irregular'?'none':''};"><label>Until</label><input type="date" id="fRecurEnd" value="${b?.recurrenceEndDate&&b?.recurrenceType!=='Irregular'?b.recurrenceEndDate:dateToIso(addYears(isoToDate(todayIso()),1))}"></div>
+      <div class="field" id="fRecurUntilWrap" style="display:${b?.recurrenceType==='Irregular'?'none':''};"><label>Until</label><input type="date" id="fRecurEnd" value="${b?.recurrenceEndDate&&b?.recurrenceType!=='Irregular'?b.recurrenceEndDate:dateToIso(addYears(isoToDate(todayIso()),1))}" onchange="refreshRoomDayPreview()"></div>
     </div>
     <div id="fIrregularWrap" style="display:${b?.recurrenceType==='Irregular'?'block':'none'};">
       <div class="small muted" style="margin:-4px 0 8px;">The date/time set above (in "Date (first / only occurrence)") is the first date — add any extra dates below, each with its own start/end time.</div>
@@ -1681,6 +1695,17 @@ function openBookingModal(id){
       </div>
       <div id="fIrregularRows"></div>
     </div>
+    ${b ? `<div class="field" id="fPausedWrap" style="display:${b.isRecurring?'block':'none'};background:var(--gray-100);border-radius:8px;padding:10px 12px;margin-bottom:14px;">
+      <label style="font-weight:700;font-size:13px;">Paused periods</label>
+      <div class="small muted" style="margin:3px 0 8px;">Skip this booking for a stretch — a funeral, a holiday closure, whatever — without ending the series. Pick a from/to date, however long (a single day, a few days, a few weeks); the series carries on as normal right after.</div>
+      <div id="fPausedList">${pausedRangesHtml(b)}</div>
+      <div class="field-row" style="align-items:flex-end;margin-top:6px;">
+        <div class="field"><label>From</label><input type="date" id="fPauseStart"></div>
+        <div class="field"><label>To</label><input type="date" id="fPauseEnd"></div>
+        <div class="field"><label>Reason (optional)</label><input type="text" id="fPauseReason" placeholder="e.g. Funeral"></div>
+        <div class="field" style="flex:0 0 auto;"><button type="button" class="btn btn-secondary btn-sm" onclick="addPausedRange('${b.id}')">Add pause</button></div>
+      </div>
+    </div>` : ''}
     <hr class="divider">
     <div class="field"><label>Equipment for this booking</label><div id="fEquipmentList">${equipRowsHtml}</div></div>
     <div style="background:var(--gray-100);border-radius:10px;padding:12px 14px;margin-bottom:14px;">
@@ -1705,6 +1730,7 @@ function openBookingModal(id){
   if(b && b.isRecurring && b.recurrenceType==='Irregular'){
     rebuildIrregularRows(b.irregularOccurrences||[]);
   }
+  refreshRoomDayPreview();
 }
 // ---------------------------------------------------------------------
 // Irregular recurring dates — no fixed weekly/monthly/yearly cadence, just a hand-picked
@@ -1712,9 +1738,9 @@ function openBookingModal(id){
 // ---------------------------------------------------------------------
 function irregularRowHtml(idx, occ){
   return `<div class="field-row" data-irregular-idx="${idx}" style="align-items:flex-end;">
-    <div class="field"><label>Date ${idx+2}</label><input type="date" data-role="irrDate" value="${occ&&occ.date?occ.date:''}"></div>
-    <div class="field"><label>Start time</label><input type="time" data-role="irrStart" value="${occ&&occ.startTime?occ.startTime:'19:00'}"></div>
-    <div class="field"><label>End time</label><input type="time" data-role="irrEnd" value="${occ&&occ.endTime?occ.endTime:'21:00'}"></div>
+    <div class="field"><label>Date ${idx+2}</label><input type="date" data-role="irrDate" value="${occ&&occ.date?occ.date:''}" onchange="refreshRoomDayPreview()"></div>
+    <div class="field"><label>Start time</label><input type="time" data-role="irrStart" value="${occ&&occ.startTime?occ.startTime:'19:00'}" onchange="refreshRoomDayPreview()"></div>
+    <div class="field"><label>End time</label><input type="time" data-role="irrEnd" value="${occ&&occ.endTime?occ.endTime:'21:00'}" onchange="refreshRoomDayPreview()"></div>
   </div>`;
 }
 function collectIrregularRowsFromDom(){
@@ -1737,6 +1763,7 @@ function rebuildIrregularRows(existingOverride){
   document.getElementById('fIrregularRows').innerHTML = rows.length
     ? rows.map((occ,idx)=>irregularRowHtml(idx,occ)).join('')
     : '<p class="muted small">No extra dates yet — set a number above and click "Set number of dates".</p>';
+  refreshRoomDayPreview();
 }
 function handleRecurTypeChange(){
   const type = document.getElementById('fRecurType').value;
@@ -1750,6 +1777,124 @@ function handleRecurTypeChange(){
     untilWrap.style.display = '';
     irregularWrap.style.display = 'none';
   }
+}
+// ---------------------------------------------------------------------
+// Pausing a recurring booking for a stretch (a funeral, a holiday closure, etc.) without
+// ending the series — one or more {start,end} ranges stored on the booking; any occurrence
+// date inside one is skipped everywhere (grid, dashboard, tasks, rota) but the series carries
+// on normally either side of it. These write straight to the record and reopen the same
+// modal — same pattern as the group/event-type quick-add — rather than going through the
+// main Save button, since a pause is its own immediate action, not a form field.
+function pausedRangesHtml(b){
+  const ranges = (b && b.pausedRanges) || [];
+  if(!ranges.length) return '<div class="small muted">No pauses set.</div>';
+  return ranges.slice().sort((a,c)=>(a.start||'').localeCompare(c.start||'')).map(p=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;">
+      <span class="small">${displayDate(p.start)} – ${displayDate(p.end)}${p.reason?' — '+escapeHtml(p.reason):''}</span>
+      <button type="button" class="icon-btn danger" title="Remove this pause" onclick="removePausedRange('${b.id}','${p.id}')">✕</button>
+    </div>`).join('');
+}
+async function addPausedRange(bookingId){
+  const start = document.getElementById('fPauseStart').value;
+  const end = document.getElementById('fPauseEnd').value;
+  if(!start || !end){ toast('Pick both a from and to date', true); return; }
+  if(end < start){ toast('The "to" date needs to be on or after the "from" date', true); return; }
+  const reason = document.getElementById('fPauseReason').value.trim();
+  const b = get('bookings', bookingId);
+  if(!b){ toast('Booking not found', true); return; }
+  const ranges = [...(b.pausedRanges||[]), { id: 'p'+Date.now(), start, end, reason: reason||null }];
+  await db.ref('bookings/'+bookingId).update({ pausedRanges: ranges });
+  await logActivity('Paused booking', bookingLabel(b)+' from '+displayDate(start)+' to '+displayDate(end)+(reason?' ('+reason+')':''));
+  toast('Booking paused for that period');
+  openBookingModal(bookingId);
+}
+async function removePausedRange(bookingId, pauseId){
+  const b = get('bookings', bookingId);
+  if(!b){ toast('Booking not found', true); return; }
+  const ranges = (b.pausedRanges||[]).filter(p=>p.id!==pauseId);
+  await db.ref('bookings/'+bookingId).update({ pausedRanges: ranges });
+  await logActivity('Removed a pause from booking', bookingLabel(b));
+  toast('Pause removed');
+  openBookingModal(bookingId);
+}
+// ---------------------------------------------------------------------
+// Live "what else is on" preview for the room/date currently picked on the booking form —
+// so you can see what's already booked before you save, rather than cross-checking the
+// availability grid separately (and it correctly skips over a paused occurrence). Flags
+// anything that actually overlaps the time currently entered, since a room can easily hold
+// several bookings a day (morning creche, evening class) as long as the hours don't clash.
+function timesOverlap(startA, endA, startB, endB){
+  if(!startA || !endA || !startB || !endB) return false; // an all-day / unspecified time never conflicts
+  return startA < endB && startB < endA;
+}
+// A lightweight not-yet-saved version of whatever's currently in the recurrence fields, just
+// enough for getOccurrenceDates to work out the full list of dates this series would land on.
+function buildDraftBookingFromForm(){
+  const isRecurring = !!document.getElementById('fRecurring')?.checked;
+  const recurrenceType = isRecurring ? document.getElementById('fRecurType')?.value : null;
+  const draft = {
+    bookingDate: document.getElementById('fDate')?.value || '',
+    startTime: document.getElementById('fStart')?.value || '',
+    endTime: document.getElementById('fEnd')?.value || '',
+    isRecurring,
+    recurrenceType,
+    recurrenceEndDate: isRecurring && recurrenceType!=='Irregular' ? (document.getElementById('fRecurEnd')?.value || null) : null,
+  };
+  if(recurrenceType==='Irregular') draft.irregularOccurrences = collectIrregularRowsFromDom().filter(r=>r.date);
+  return draft;
+}
+function refreshRoomDayPreview(){
+  const wrap = document.getElementById('fRoomDayPreview');
+  if(!wrap) return;
+  const dateEl = document.getElementById('fDate');
+  const dateVal = dateEl ? dateEl.value : '';
+  if(!dateVal){ wrap.innerHTML = ''; return; }
+  const wholeComplex = document.getElementById('fWholeComplex').checked;
+  const roomId = document.getElementById('fRoom').value;
+  const currentId = wrap.dataset.editingId || '';
+  const myStart = document.getElementById('fStart')?.value || '';
+  const myEnd = document.getElementById('fEnd')?.value || '';
+  const matches = [];
+  let hasClash = false;
+  list('bookings').forEach(bk=>{
+    if(bk.id===currentId) return; // don't show this same booking against itself
+    if(!wholeComplex && !bk.isWholeComplex && bk.roomId!==roomId) return;
+    if(!getOccurrenceDates(bk, dateVal, dateVal).length) return;
+    const times = occurrenceTimesFor(bk, dateVal);
+    const roomLabel = bk.isWholeComplex ? 'Whole complex' : (get('rooms',bk.roomId)?.name||'');
+    const clash = timesOverlap(myStart, myEnd, times.startTime, times.endTime);
+    if(clash) hasClash = true;
+    matches.push(`${clash?'<strong style="color:var(--red-600);">⚠ ':''}${times.startTime||''}–${times.endTime||''} — ${escapeHtml(get('groups',bk.groupId)?.name||'Booking')} (${escapeHtml(roomLabel)})${clash?' — clashes with the time above</strong>':''}`);
+  });
+  let html = matches.length
+    ? `<div class="small" style="margin-top:6px;background:${hasClash?'var(--red-100)':'var(--gray-100)'};border-radius:8px;padding:8px 10px;"><strong>Already on that day:</strong><br>${matches.join('<br>')}</div>`
+    : '<div class="small muted" style="margin-top:6px;">Nothing else booked '+(wholeComplex?'anywhere':'in that room')+' on this date.</div>';
+
+  // For a recurring booking, a clash on the first date is only half the picture — check every
+  // future occurrence in the series too (2-year horizon, capped at a handful reported) so a
+  // weekly clash three months out doesn't go unnoticed until it actually comes around.
+  if(document.getElementById('fRecurring')?.checked){
+    const draft = buildDraftBookingFromForm();
+    const horizonEnd = dateToIso(addYears(isoToDate(dateVal), 2));
+    const seriesDates = getOccurrenceDates(draft, dateVal, horizonEnd).filter(d=>d!==dateVal);
+    const found = [];
+    outer: for(const d of seriesDates){
+      for(const bk of list('bookings')){
+        if(bk.id===currentId) continue;
+        if(!wholeComplex && !bk.isWholeComplex && bk.roomId!==roomId) continue;
+        if(!getOccurrenceDates(bk, d, d).length) continue;
+        const t = occurrenceTimesFor(bk, d);
+        if(timesOverlap(myStart, myEnd, t.startTime, t.endTime)){
+          found.push(displayDate(d)+' with '+escapeHtml(get('groups',bk.groupId)?.name||'a booking'));
+          if(found.length>=6) break outer;
+        }
+      }
+    }
+    if(found.length){
+      html += `<div class="small" style="margin-top:6px;background:var(--red-100);border-radius:8px;padding:8px 10px;color:var(--red-600);"><strong>⚠ This recurring booking also clashes later in the series:</strong><br>${found.join('<br>')}${found.length>=6?'<br>…and possibly more further on':''}</div>`;
+    }
+  }
+  wrap.innerHTML = html;
 }
 function handleEventTypeChange(){
   const et = get('eventTypes', document.getElementById('fEventType').value);

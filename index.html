@@ -59,6 +59,11 @@
   .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--green-500);box-shadow:0 0 0 3px var(--green-100);}
   .field-row{display:flex;gap:10px;}
   .field-row > .field{flex:1;}
+  /* Checkboxes everywhere: bigger, and no longer stretched full-width by the ".field input" rule
+     above (that rule was leaving a big invisible gap between a checkbox and its label text). */
+  input[type=checkbox]{width:18px;height:18px;flex-shrink:0;cursor:pointer;accent-color:var(--green-600);}
+  .field input[type=checkbox]{width:18px;}
+  label:has(input[type=checkbox]){cursor:pointer;}
   .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;transition:filter .1s;}
   .btn:active{filter:brightness(.92);}
   .btn-primary{background:var(--green-600);color:#fff;}
@@ -282,7 +287,7 @@
     </div>
     <div class="nav-item" data-tab="setup" onclick="Nav.go('setup')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
-      Setup
+      Setup: Rooms, Events &amp; Tasks
     </div>
     <div class="nav-item" data-tab="history" onclick="Nav.go('history')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3.5 2"/></svg>
@@ -407,7 +412,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 118;
+const APP_REVISION = 120;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -930,7 +935,7 @@ document.getElementById('loginForm').addEventListener('submit', async e=>{
 // ---------------------------------------------------------------------
 // 5. NAV
 // ---------------------------------------------------------------------
-const TAB_TITLES = { dashboard:'Dashboard', bookings:'Bookings', groups:'Groups & Members', finance:'Payments & Expenses', setup:'Setup', history:'History', rota:'Rota', gallery:'Gallery', energy:'Energy', equipment:'Equipment', doorcodes:'Door & Lock Codes', volunteers:'Volunteers & Sponsors', aed:'AED & Safety', settings:'Settings' };
+const TAB_TITLES = { dashboard:'Dashboard', bookings:'Bookings', groups:'Groups & Members', finance:'Payments & Expenses', setup:'Setup: Rooms, Events & Tasks', history:'History', rota:'Rota', gallery:'Gallery', energy:'Energy', equipment:'Equipment', doorcodes:'Door & Lock Codes', volunteers:'Volunteers & Sponsors', aed:'AED & Safety', settings:'Settings' };
 const Nav = {
   current: null,
   go(tab){
@@ -1060,8 +1065,12 @@ function printBookingSummary(id){
       <tr><th style="width:160px;">Group</th><td>${escapeHtml(group?group.name:'—')}</td></tr>
       <tr><th>Room</th><td>${roomPhoto || escapeHtml(bookingRoomName(b))}</td></tr>
       <tr><th>Event type</th><td>${escapeHtml(eventType?eventType.name:'—')}</td></tr>
-      <tr><th>Date</th><td>${displayDate(b.bookingDate)} (${weekdayName(b.bookingDate)})${b.isRecurring?' — recurring '+escapeHtml(b.recurrenceType||''):''}</td></tr>
+      ${b.isRecurring && b.recurrenceType==='Irregular' ? `
+      <tr><th>Dates &amp; times</th><td>${allOccurrenceDatesSorted(b).map(d=>{ const t=occurrenceTimesFor(b,d); return displayDate(d)+' ('+weekdayName(d)+') '+(t.startTime||'—')+' – '+(t.endTime||'—'); }).join('<br>')}</td></tr>
+      ` : `
+      <tr><th>Date</th><td>${displayDate(b.bookingDate)} (${weekdayName(b.bookingDate)})${b.isRecurring?' — recurring '+escapeHtml(recurrenceSummaryText(b)):''}</td></tr>
       <tr><th>Time</th><td>${b.startTime||'—'} – ${b.endTime||'—'}</td></tr>
+      `}
       <tr><th>Kitchen / Heating</th><td>${b.kitchenRequired?'Kitchen ':''}${b.heatingRequired?'Heating':''}${(!b.kitchenRequired&&!b.heatingRequired)?'—':''}</td></tr>
       <tr><th>Notes</th><td>${escapeHtml(b.notes||'—')}</td></tr>
     </table>
@@ -1087,6 +1096,15 @@ function getOccurrenceDates(booking, rangeStartIso, rangeEndIso){
     if(start>=rangeStart && start<=rangeEnd) dates.push(booking.bookingDate);
     return dates;
   }
+  // Irregular: no fixed cadence — just the first-occurrence date plus whatever extra dates
+  // were entered by hand, each with its own time (see occurrenceTimesFor).
+  if(booking.recurrenceType==='Irregular'){
+    allOccurrenceDatesSorted(booking).forEach(iso=>{
+      const d = isoToDate(iso);
+      if(d>=rangeStart && d<=rangeEnd) dates.push(iso);
+    });
+    return dates;
+  }
   const seriesEnd = booking.recurrenceEndDate ? isoToDate(booking.recurrenceEndDate) : rangeEnd;
   let cur = start;
   let safety = 0;
@@ -1104,6 +1122,30 @@ function nextOccurrence(booking, fromIso){
   const dates = getOccurrenceDates(booking, fromIso, dateToIso(addYears(isoToDate(fromIso),5)));
   return dates[0] || null;
 }
+// All dates this booking falls on, first-occurrence field plus any extra Irregular dates, deduped & sorted.
+function allOccurrenceDatesSorted(booking){
+  if(!booking.isRecurring || booking.recurrenceType!=='Irregular') return [booking.bookingDate];
+  const list = [booking.bookingDate, ...((booking.irregularOccurrences||[]).map(o=>o.date))].filter(Boolean);
+  return [...new Set(list)].sort();
+}
+// The start/end time for one specific occurrence date — on an Irregular booking each extra
+// date carries its own time; everything else just uses the booking's one fixed time.
+function occurrenceTimesFor(booking, dateIso){
+  if(booking.isRecurring && booking.recurrenceType==='Irregular'){
+    if(dateIso===booking.bookingDate) return { startTime: booking.startTime, endTime: booking.endTime };
+    const match = (booking.irregularOccurrences||[]).find(o=>o.date===dateIso);
+    if(match) return { startTime: match.startTime, endTime: match.endTime };
+  }
+  return { startTime: booking.startTime, endTime: booking.endTime };
+}
+// A short human summary of the recurrence pattern, for messages/printouts.
+function recurrenceSummaryText(booking){
+  if(!booking.isRecurring) return '';
+  if(booking.recurrenceType==='Irregular'){
+    return 'on these dates: ' + allOccurrenceDatesSorted(booking).map(d=>displayDate(d)).join(', ');
+  }
+  return (booking.recurrenceType||'') + ' until ' + displayDate(booking.recurrenceEndDate);
+}
 function bookingLabel(b){
   const group = get('groups', b.groupId);
   return (group?group.name:'—') + ' — ' + bookingRoomName(b);
@@ -1116,6 +1158,7 @@ function eventTypeName(id){ const e=get('eventTypes',id); return e?e.name:'—';
 
 function occurrenceIndexOf(booking, dateIso){
   if(!booking.isRecurring) return 0;
+  if(booking.recurrenceType==='Irregular') return Math.max(0, allOccurrenceDatesSorted(booking).indexOf(dateIso));
   let idx = 0, cur = isoToDate(booking.bookingDate); const target = isoToDate(dateIso);
   while(cur < target && idx < 5000){
     if(booking.recurrenceType==='Weekly') cur = addDays(cur,7);
@@ -1150,10 +1193,34 @@ function bookingApprovalEnabled(){ return !!(State.config && State.config.bookin
 // Bookings created before this feature existed (or while it was off) have no `status` field —
 // treat those as confirmed so turning this on never retroactively flags old bookings as pending.
 function bookingEffectiveStatus(b){ if(!bookingApprovalEnabled()) return 'confirmed'; return b.status || 'confirmed'; }
+// Insurance is only "confirmed" if it's ticked on the Group AND, if an expiry date is set,
+// that date hasn't passed yet — so cover lapsing quietly no longer slips through unnoticed.
+function groupInsuranceEffectiveOk(group){
+  if(!group || !group.hasInsurance) return false;
+  if(group.insuranceExpiryDate && isoToDate(group.insuranceExpiryDate) < isoToDate(todayIso())) return false;
+  return true;
+}
+function groupInsuranceStatusPill(group){
+  if(!group || !group.hasInsurance) return '<span class="pill pill-red">Not confirmed</span>';
+  if(group.insuranceExpiryDate){
+    const daysLeft = Math.round((isoToDate(group.insuranceExpiryDate) - isoToDate(todayIso())) / 86400000);
+    if(daysLeft < 0) return '<span class="pill pill-red">Expired '+displayDate(group.insuranceExpiryDate)+'</span>';
+    if(daysLeft <= 30) return '<span class="pill pill-amber">Expires '+displayDate(group.insuranceExpiryDate)+'</span>';
+    return '<span class="pill pill-green">Confirmed (to '+displayDate(group.insuranceExpiryDate)+')</span>';
+  }
+  return '<span class="pill pill-green">Confirmed</span>';
+}
 function bookingInsuranceOk(b, group){
   if(b.insuranceOverride===true) return true;
   if(b.insuranceOverride===false) return false;
-  return !!(group && group.hasInsurance);
+  return groupInsuranceEffectiveOk(group);
+}
+// Shown next to a booking (Bookings list, booking modal) regardless of whether the approval
+// workflow toggle is on — insurance status is useful to see at a glance either way.
+function bookingInsurancePillHtml(b, group){
+  if(b.insuranceOverride===true) return '<span class="pill pill-green" title="Insurance override set on this booking">Confirmed (override)</span>';
+  if(b.insuranceOverride===false) return '<span class="pill pill-red" title="Insurance override set on this booking">Not confirmed (override)</span>';
+  return groupInsuranceStatusPill(group);
 }
 function bookingStatusPillHtml(b){
   if(!bookingApprovalEnabled()) return '';
@@ -1166,7 +1233,9 @@ async function approveBooking(id){
   if(!b){ toast('Booking not found', true); return; }
   const group = get('groups', b.groupId);
   if(!bookingInsuranceOk(b, group)){
-    toast((group?group.name:'This group')+"'s insurance isn't confirmed — tick it on the Group (Groups & Members), or set an insurance override on this booking, before approving.", true);
+    const expired = group && group.hasInsurance && group.insuranceExpiryDate && isoToDate(group.insuranceExpiryDate) < isoToDate(todayIso());
+    const reason = expired ? ('expired on '+displayDate(group.insuranceExpiryDate)) : "isn't confirmed";
+    toast((group?group.name:'This group')+"'s insurance "+reason+" — update it on the Group (Groups & Members), or set an insurance override on this booking, before approving.", true);
     return;
   }
   await db.ref('bookings/'+id).update({ status:'confirmed', approvedBy:Session.username, approvedAt:nowStamp() });
@@ -1214,7 +1283,7 @@ function buildConfirmationMessage(booking){
   const et = get('eventTypes', booking.eventTypeId);
   let body = `Booking confirmed — ${hallName}\n\n`;
   body += `Group: ${group?group.name:''}\nRoom: ${room}\nDate: ${displayDate(booking.bookingDate)} (${weekdayName(booking.bookingDate)})\nTime: ${booking.startTime||''}–${booking.endTime||''}\n`;
-  if(booking.isRecurring) body += `Repeats: ${booking.recurrenceType} until ${displayDate(booking.recurrenceEndDate)}\n`;
+  if(booking.isRecurring) body += `Repeats: ${recurrenceSummaryText(booking)}\n`;
   if(et) body += `Rate: ${euro(et.standardRate)} (${et.chargingMethod})\n`;
   if(booking.notes) body += `Notes: ${booking.notes}\n`;
   body += `\nThanks,\n${hallName}`;
@@ -1225,7 +1294,7 @@ function buildHallAlertMessage(booking){
   const room = bookingRoomName(booking);
   const group = get('groups', booking.groupId)?.name || '';
   let body = `New booking — ${hallName}\n${group} has booked ${room} on ${displayDate(booking.bookingDate)} (${weekdayName(booking.bookingDate)}), ${booking.startTime||''}–${booking.endTime||''}.`;
-  if(booking.isRecurring) body += ` Repeats ${booking.recurrenceType.toLowerCase()} until ${displayDate(booking.recurrenceEndDate)}.`;
+  if(booking.isRecurring) body += ` Repeats: ${recurrenceSummaryText(booking)}.`;
   return body;
 }
 function buildRotaMessage(booking, weeksAhead){
@@ -1390,19 +1459,22 @@ function renderBookings(){
         </div>
         <button class="btn btn-primary" onclick="openBookingModal()">+ New Booking</button>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Next date</th><th>Room</th><th>Group</th><th>Event type</th><th>Time</th><th>Recurring</th>${approvalOn?'<th>Status</th>':''}<th>Tasks</th><th>Est. cost</th><th></th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th>Next date</th><th>Room</th><th>Group</th><th>Event type</th><th>Time</th><th>Recurring</th>${approvalOn?'<th>Status</th>':''}<th>Insurance</th><th>Tasks</th><th>Est. cost</th><th></th></tr></thead><tbody>
         ${rows.length ? rows.map(b=>{
           const taskEntries = b.tasks?Object.values(b.tasks):[];
           const done = taskEntries.filter(t=>t.isCompleted).length;
           const canApproveThis = approvalOn && bookingEffectiveStatus(b)==='pending' && sessionCanApprove();
+          const groupForRow = get('groups', b.groupId);
+          const occTimes = b.isRecurring && b.recurrenceType==='Irregular' && b.nextOcc ? occurrenceTimesFor(b, b.nextOcc) : {startTime:b.startTime, endTime:b.endTime};
           return `<tr>
             <td>${b.nextOcc?displayDate(b.nextOcc):'<span class="muted">series ended</span>'}</td>
             <td>${b.isWholeComplex?'<span class="pill pill-amber">Whole Complex</span>':escapeHtml(get('rooms',b.roomId)?.name||'—')}</td>
-            <td>${escapeHtml(get('groups',b.groupId)?.name||'—')}</td>
+            <td>${escapeHtml(groupForRow?.name||'—')}</td>
             <td>${escapeHtml(eventTypeName(b.eventTypeId))}</td>
-            <td>${b.startTime||''}–${b.endTime||''}</td>
+            <td>${occTimes.startTime||''}–${occTimes.endTime||''}${b.isRecurring && b.recurrenceType==='Irregular'?' <span class="small muted" title="Times can vary by date on an Irregular booking">(varies)</span>':''}</td>
             <td>${b.isRecurring?`<span class="pill pill-green">${escapeHtml(b.recurrenceType)}</span>`:'<span class="pill pill-gray">One-off</span>'}</td>
             ${approvalOn?`<td>${bookingStatusPillHtml(b)}</td>`:''}
+            <td>${bookingInsurancePillHtml(b, groupForRow)}</td>
             <td>${taskEntries.length? `${done}/${taskEntries.length}` : '<span class="muted">—</span>'}</td>
             <td>${b.estimatedCost?euro(b.estimatedCost):'<span class="muted small">—</span>'}</td>
             <td style="white-space:nowrap;">
@@ -1414,7 +1486,7 @@ function renderBookings(){
               ${canDelete?`<button class="icon-btn danger" title="Delete" onclick="deleteBooking('${b.id}')">🗑</button>`:''}
             </td>
           </tr>`;
-        }).join('') : `<tr class="empty-row"><td colspan="${approvalOn?10:9}">No bookings match this view</td></tr>`}
+        }).join('') : `<tr class="empty-row"><td colspan="${approvalOn?11:10}">No bookings match this view</td></tr>`}
       </tbody></table></div>
     </div>
     <div class="card">
@@ -1441,7 +1513,8 @@ function renderAvailabilityGrid(weekStartIso){
       if(!b.isWholeComplex && b.roomId!==roomId) continue;
       if(getOccurrenceDates(b, dateIso, dateIso).length){
         const tag = b.isWholeComplex ? ' <span class="pill pill-amber" style="font-size:9px;padding:1px 5px;">Whole complex</span>' : '';
-        return `${b.startTime||''}-${b.endTime||''}<br><span class="muted">${escapeHtml(get('groups',b.groupId)?.name||'')}</span>${tag}`;
+        const times = occurrenceTimesFor(b, dateIso);
+        return `${times.startTime||''}-${times.endTime||''}<br><span class="muted">${escapeHtml(get('groups',b.groupId)?.name||'')}</span>${tag}`;
       }
     }
     return '';
@@ -1518,17 +1591,23 @@ function openBookingModal(id){
 
   const approvalOn = bookingApprovalEnabled();
   const groupForInsurance = b ? get('groups', b.groupId) : null;
-  const bookingStatusSectionHtml = !approvalOn ? '' : `
+  // Insurance line + override always shows (useful info regardless of the approval toggle);
+  // the pending/confirmed status pill and Approve/Revert buttons only matter once that's on.
+  const bookingStatusSectionHtml = `
     <div style="background:var(--gray-100);border-radius:10px;padding:12px 14px;margin-bottom:14px;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div style="font-weight:700;font-size:13px;">Insurance</div>
+        ${b ? bookingInsurancePillHtml(b, groupForInsurance) : (groupForInsurance ? groupInsuranceStatusPill(groupForInsurance) : '<span class="small muted">Pick a group above</span>')}
+      </div>
+      ${approvalOn ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;">
         <div style="font-weight:700;font-size:13px;">Booking status</div>
         ${b ? bookingStatusPillHtml(b) : '<span class="pill pill-red">Pending Approval</span>'}
       </div>
       <div class="small muted" style="margin-top:6px;">
         ${b
-          ? (bookingInsuranceOk(b, groupForInsurance) ? 'Insurance: confirmed.' : "Insurance: not confirmed — this needs to be sorted (on the Group, or with the override below) before the booking can be approved.")
+          ? (bookingInsuranceOk(b, groupForInsurance) ? '' : "Insurance needs to be sorted (on the Group, or with the override below) before this booking can be approved.")
           : "New bookings need to be approved before they're confirmed — save this one first, then approve it."}
-      </div>
+      </div>` : ''}
       <div class="field" style="margin-top:8px;">
         <label>Insurance override for this booking</label>
         <select id="fInsuranceOverride">
@@ -1536,9 +1615,9 @@ function openBookingModal(id){
           <option value="yes" ${b && b.insuranceOverride===true ? 'selected':''}>Confirmed for this booking</option>
           <option value="no" ${b && b.insuranceOverride===false ? 'selected':''}>Not confirmed for this booking</option>
         </select>
-        <div class="small muted" style="margin-top:4px;">Only needed if this booking's insurance situation is different from the group's usual setup.</div>
+        <div class="small muted" style="margin-top:4px;">Only needed if this booking's insurance situation is different from the group's usual setup (e.g. their cover has lapsed for now, or a normally-uninsured group has sorted a one-off policy just for this event).</div>
       </div>
-      ${b ? `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+      ${approvalOn && b ? `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
         ${bookingEffectiveStatus(b)==='pending' && sessionCanApprove() ? `<button type="button" class="btn btn-primary btn-sm" onclick="saveInsuranceOverrideThenApprove('${b.id}')">Approve &amp; Confirm</button>` : ''}
         ${bookingEffectiveStatus(b)==='confirmed' && Session.role==='admin' ? `<button type="button" class="btn btn-secondary btn-sm" onclick="revertBookingToPending('${b.id}')">Revert to Pending</button>` : ''}
       </div>` : ''}
@@ -1557,7 +1636,7 @@ function openBookingModal(id){
       <div class="field"><label>Group / Booked by</label><select id="fGroup" onchange="handleGroupSelectChange(this)">${opt(groups, b?.groupId, g=>g.name)}<option value="__new__">+ Add new group…</option></select></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Event type</label><select id="fEventType" onchange="handleEventTypeChange()">${opt(eventTypes, b?.eventTypeId, e=>e.name)}</select><div class="small muted" id="fRateHint" style="margin-top:4px;"></div></div>
+      <div class="field"><label>Event type</label><select id="fEventType" onchange="handleEventTypeSelectChange(this)">${opt(eventTypes, b?.eventTypeId, e=>e.name)}<option value="__new__">+ Add new event type…</option></select><div class="small muted" id="fRateHint" style="margin-top:4px;"></div></div>
     </div>
     <div id="fHeadcountWrap" style="display:none;">
       <div class="field-row">
@@ -1582,8 +1661,21 @@ function openBookingModal(id){
     <hr class="divider">
     <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="fRecurring" ${b?.isRecurring?'checked':''} onchange="document.getElementById('fRecurringOpts').style.display=this.checked?'flex':'none'"> This is a recurring booking</label></div>
     <div class="field-row" id="fRecurringOpts" style="display:${b?.isRecurring?'flex':'none'};">
-      <div class="field"><label>Repeats</label><select id="fRecurType"><option value="Weekly" ${b?.recurrenceType==='Weekly'?'selected':''}>Weekly</option><option value="Monthly" ${b?.recurrenceType==='Monthly'?'selected':''}>Monthly</option><option value="Yearly" ${b?.recurrenceType==='Yearly'?'selected':''}>Yearly</option></select></div>
-      <div class="field"><label>Until</label><input type="date" id="fRecurEnd" value="${b?.recurrenceEndDate||dateToIso(addYears(isoToDate(todayIso()),1))}"></div>
+      <div class="field"><label>Repeats</label><select id="fRecurType" onchange="handleRecurTypeChange()">
+        <option value="Weekly" ${b?.recurrenceType==='Weekly'?'selected':''}>Weekly</option>
+        <option value="Monthly" ${b?.recurrenceType==='Monthly'?'selected':''}>Monthly</option>
+        <option value="Yearly" ${b?.recurrenceType==='Yearly'?'selected':''}>Yearly</option>
+        <option value="Irregular" ${b?.recurrenceType==='Irregular'?'selected':''}>Irregular (pick specific dates)</option>
+      </select></div>
+      <div class="field" id="fRecurUntilWrap" style="display:${b?.recurrenceType==='Irregular'?'none':''};"><label>Until</label><input type="date" id="fRecurEnd" value="${b?.recurrenceEndDate&&b?.recurrenceType!=='Irregular'?b.recurrenceEndDate:dateToIso(addYears(isoToDate(todayIso()),1))}"></div>
+    </div>
+    <div id="fIrregularWrap" style="display:${b?.recurrenceType==='Irregular'?'block':'none'};">
+      <div class="small muted" style="margin:-4px 0 8px;">The date/time set above (in "Date (first / only occurrence)") is the first date — add any extra dates below, each with its own start/end time.</div>
+      <div class="field-row" style="align-items:flex-end;">
+        <div class="field" style="max-width:170px;"><label>How many extra dates?</label><input type="number" id="fIrregularCount" min="0" max="30" value="${b?.irregularOccurrences?b.irregularOccurrences.length:1}"></div>
+        <div class="field" style="flex:0 0 auto;"><button type="button" class="btn btn-secondary btn-sm" onclick="rebuildIrregularRows()">Set number of dates</button></div>
+      </div>
+      <div id="fIrregularRows"></div>
     </div>
     <hr class="divider">
     <div class="field"><label>Equipment for this booking</label><div id="fEquipmentList">${equipRowsHtml}</div></div>
@@ -1600,9 +1692,60 @@ function openBookingModal(id){
   `, true);
 
   const etSel = document.getElementById('fEventType');
-  if(etSel && etSel.value){ etSel.dispatchEvent(new Event('change')); }
+  // Guard against "__new__": if no event types exist yet, that's the only option in the select
+  // and it auto-selects on open — without this check it would pop up the "add new" prompt the
+  // instant the New Booking form appears, before the user has touched anything.
+  if(etSel && etSel.value && etSel.value!=='__new__'){ etSel.dispatchEvent(new Event('change')); }
   updateRoomPreview();
   updateBookingCostEstimate();
+  if(b && b.isRecurring && b.recurrenceType==='Irregular'){
+    rebuildIrregularRows(b.irregularOccurrences||[]);
+  }
+}
+// ---------------------------------------------------------------------
+// Irregular recurring dates — no fixed weekly/monthly/yearly cadence, just a hand-picked
+// list of extra dates (each with its own time) on top of the first occurrence above.
+// ---------------------------------------------------------------------
+function irregularRowHtml(idx, occ){
+  return `<div class="field-row" data-irregular-idx="${idx}" style="align-items:flex-end;">
+    <div class="field"><label>Date ${idx+2}</label><input type="date" data-role="irrDate" value="${occ&&occ.date?occ.date:''}"></div>
+    <div class="field"><label>Start time</label><input type="time" data-role="irrStart" value="${occ&&occ.startTime?occ.startTime:'19:00'}"></div>
+    <div class="field"><label>End time</label><input type="time" data-role="irrEnd" value="${occ&&occ.endTime?occ.endTime:'21:00'}"></div>
+  </div>`;
+}
+function collectIrregularRowsFromDom(){
+  return Array.from(document.querySelectorAll('#fIrregularRows [data-irregular-idx]')).map(row=>({
+    date: row.querySelector('[data-role="irrDate"]').value,
+    startTime: row.querySelector('[data-role="irrStart"]').value,
+    endTime: row.querySelector('[data-role="irrEnd"]').value
+  }));
+}
+// existingOverride lets openBookingModal seed the rows straight from a saved booking on first
+// render; called with no argument (e.g. from the "Set number of dates" button) it preserves
+// whatever's already in the visible rows and just grows/shrinks to match the new count.
+function rebuildIrregularRows(existingOverride){
+  const countEl = document.getElementById('fIrregularCount');
+  const existing = existingOverride || collectIrregularRowsFromDom();
+  const count = Math.max(0, Math.min(30, Number(countEl.value)||existing.length||0));
+  countEl.value = count;
+  const rows = [];
+  for(let i=0;i<count;i++) rows.push(existing[i]||null);
+  document.getElementById('fIrregularRows').innerHTML = rows.length
+    ? rows.map((occ,idx)=>irregularRowHtml(idx,occ)).join('')
+    : '<p class="muted small">No extra dates yet — set a number above and click "Set number of dates".</p>';
+}
+function handleRecurTypeChange(){
+  const type = document.getElementById('fRecurType').value;
+  const untilWrap = document.getElementById('fRecurUntilWrap');
+  const irregularWrap = document.getElementById('fIrregularWrap');
+  if(type==='Irregular'){
+    untilWrap.style.display = 'none';
+    irregularWrap.style.display = 'block';
+    if(!document.querySelector('#fIrregularRows [data-irregular-idx]')) rebuildIrregularRows();
+  } else {
+    untilWrap.style.display = '';
+    irregularWrap.style.display = 'none';
+  }
 }
 function handleEventTypeChange(){
   const et = get('eventTypes', document.getElementById('fEventType').value);
@@ -1720,6 +1863,16 @@ async function saveBookingForm(id){
     tasks,
     updatedAt: nowStamp(), updatedBy: Session.username
   };
+  if(data.isRecurring && data.recurrenceType==='Irregular'){
+    const extraRows = collectIrregularRowsFromDom().filter(r=>r.date); // drop any blank rows
+    data.irregularOccurrences = extraRows;
+    const allDates = [data.bookingDate, ...extraRows.map(r=>r.date)].filter(Boolean).sort();
+    data.recurrenceEndDate = allDates[allDates.length-1] || data.bookingDate;
+  } else if(data.isRecurring){
+    data.irregularOccurrences = null;
+  } else {
+    data.irregularOccurrences = null;
+  }
   const insuranceOverrideEl = document.getElementById('fInsuranceOverride');
   if(insuranceOverrideEl){
     const v = insuranceOverrideEl.value;
@@ -1771,7 +1924,7 @@ function renderGroups(){
         <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Type</th><th>Insurance</th><th></th></tr></thead><tbody>
           ${groups.length?groups.map(g=>`<tr>
             <td>${escapeHtml(g.name)}</td><td>${escapeHtml(g.contactName||'')}</td><td>${escapeHtml(g.contactPhone||'')}</td><td><span class="pill pill-gray">${escapeHtml(g.groupType||'')}</span></td>
-            <td><span class="pill ${g.hasInsurance?'pill-green':'pill-red'}">${g.hasInsurance?'Confirmed':'Not confirmed'}</span></td>
+            <td>${groupInsuranceStatusPill(g)}</td>
             <td style="white-space:nowrap;"><button class="icon-btn" onclick="openGroupModal('${g.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('groups','${g.id}','group')">🗑</button>`:''}</td>
           </tr>`).join(''):'<tr class="empty-row"><td colspan="6">No groups yet</td></tr>'}
         </tbody></table></div>
@@ -1808,14 +1961,19 @@ function openGroupModal(id){
     </div>
     <div class="field"><label>Contact email</label><input type="email" id="gEmail" value="${escapeHtml(g?.contactEmail||'')}"></div>
     <div class="field"><label>Group type</label><input type="text" id="gType" placeholder="e.g. Sports, Community, Farming, Music" value="${escapeHtml(g?.groupType||'')}"></div>
-    <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="gHasInsurance" ${g?.hasInsurance?'checked':''}> Has current public liability insurance of their own</label><div class="small muted" style="margin-top:3px;">Used by the booking approval workflow (Settings → Booking Approval), if you've turned that on — a booking can be blocked from being confirmed until this is ticked.</div></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="gHasInsurance" ${g?.hasInsurance?'checked':''}> Has current public liability insurance of their own</label><div class="small muted" style="margin-top:3px;">Used by the booking approval workflow (Settings → Booking Approval), if you've turned that on — a booking can be blocked from being confirmed until this is ticked (and, below, not expired).</div></div>
+    <div class="field-row">
+      <div class="field"><label>Insurance details (provider / policy no.)</label><input type="text" id="gInsuranceProvider" placeholder="e.g. Aviva, policy AB12345" value="${escapeHtml(g?.insuranceProvider||'')}"></div>
+      <div class="field"><label>Insurance expiry date</label><input type="date" id="gInsuranceExpiry" value="${g?.insuranceExpiryDate||''}"></div>
+    </div>
+    <div class="small muted" style="margin-top:-8px;margin-bottom:12px;">Optional — leave the expiry date blank if you don't want to track it. If it's set and the date passes, this group's insurance stops counting as confirmed for the booking approval workflow until the date's updated, even if the tickbox above is still ticked.</div>
     <div class="field"><label>Notes</label><textarea id="gNotes" rows="2">${escapeHtml(g?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveGroup('${id||''}')">Save</button>`);
 }
 async function saveGroup(id){
   const name = document.getElementById('gName').value.trim();
   if(!name){ toast('Group name required', true); return; }
-  const data = { name, contactName:document.getElementById('gContact').value, contactPhone:document.getElementById('gPhone').value, contactEmail:document.getElementById('gEmail').value, groupType:document.getElementById('gType').value, hasInsurance:document.getElementById('gHasInsurance').checked, notes:document.getElementById('gNotes').value };
+  const data = { name, contactName:document.getElementById('gContact').value, contactPhone:document.getElementById('gPhone').value, contactEmail:document.getElementById('gEmail').value, groupType:document.getElementById('gType').value, hasInsurance:document.getElementById('gHasInsurance').checked, insuranceProvider:document.getElementById('gInsuranceProvider').value, insuranceExpiryDate:document.getElementById('gInsuranceExpiry').value||null, notes:document.getElementById('gNotes').value };
   if(id) await db.ref('groups/'+id).update(data); else await db.ref('groups').push(data);
   await logActivity(id?'Edited group':'Added group', name);
   Modal.close(); toast('Group saved');
@@ -1836,6 +1994,22 @@ async function handleGroupSelectChange(selectEl){
   selectEl.insertBefore(opt, selectEl.querySelector('option[value="__new__"]'));
   selectEl.value = ref.key;
   toast('Group added — add contact details later from Groups & Members if you like');
+}
+// Same idea as the group quick-add above, so a booking for a brand-new event type doesn't mean
+// abandoning this form, going to Setup, adding it there, then coming back and starting over.
+async function handleEventTypeSelectChange(selectEl){
+  if(selectEl.value !== '__new__'){ handleEventTypeChange(); return; }
+  const name = (prompt('New event type name:')||'').trim();
+  if(!name){ selectEl.value=''; handleEventTypeChange(); return; }
+  const ref = db.ref('eventTypes').push();
+  await ref.set({ name, chargingMethod:'Flat Rate', standardRate:0, adultRate:0, childRate:0, seniorRate:0, familyRate:0, createdAt: nowStamp() });
+  await logActivity('Added event type', name);
+  const opt = document.createElement('option');
+  opt.value = ref.key; opt.textContent = name;
+  selectEl.insertBefore(opt, selectEl.querySelector('option[value="__new__"]'));
+  selectEl.value = ref.key;
+  toast('Event type added at €0 (Flat Rate) — set its real charging method/rate later from Setup if you like');
+  handleEventTypeChange();
 }
 
 function openMemberModal(id){
@@ -3658,11 +3832,16 @@ function renderSettings(){
         <input type="checkbox" id="cfgRequireAdminKey" ${State.config.requireAdminPromotionKey!==false?'checked':''} onchange="saveRequireAdminKeySetting(this.checked)">
         Require the admin promotion key when creating a new Admin account
       </label>
-      <div class="table-wrap"><table><thead><tr><th>Username</th><th>Role</th><th>Active</th><th>Created</th><th></th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th>Username</th><th>Role</th><th>Booking Approval</th><th>Active</th><th>Created</th><th></th></tr></thead><tbody>
         ${users.length?users.map(u=>{
           const isSelf = u.id===Session.uid;
           return `<tr>
-            <td>${escapeHtml(u.username)}</td><td><span class="pill ${u.role==='admin'?'pill-amber':'pill-gray'}">${escapeHtml(u.role)}</span>${u.canApproveBookings?' <span class="pill pill-green" title="Can approve bookings">Approver</span>':''}</td>
+            <td>${escapeHtml(u.username)}</td>
+            <td><span class="pill ${u.role==='admin'?'pill-amber':'pill-gray'}">${escapeHtml(u.role)}</span></td>
+            <td>${u.role==='admin'
+              ? '<span class="small muted" title="Admins can always approve bookings">Always (Admin)</span>'
+              : `<label class="small" style="display:flex;align-items:center;gap:6px;white-space:nowrap;"><input type="checkbox" ${u.canApproveBookings?'checked':''} onchange="toggleUserCanApprove('${u.id}', this.checked)"> ${u.canApproveBookings?'<span class="pill pill-green">Can approve</span>':'Off'}</label>`}
+            </td>
             <td>${u.isActive===false?'<span class="pill pill-red">Disabled</span>':'<span class="pill pill-green">Active</span>'}</td>
             <td class="small muted">${u.createdAt?displayDate(u.createdAt.slice(0,10)):''}</td>
             <td style="white-space:nowrap;">
@@ -3672,7 +3851,7 @@ function renderSettings(){
               <button class="icon-btn danger" onclick="deleteUserAccount('${u.id}','${escapeHtml(u.username)}')">🗑</button>`:' <span class="small muted">this is you</span>'}
             </td>
           </tr>`;
-        }).join(''):'<tr class="empty-row"><td colspan="5">No users</td></tr>'}
+        }).join(''):'<tr class="empty-row"><td colspan="6">No users</td></tr>'}
       </tbody></table></div>
     </div>
     <div class="card">
@@ -3860,6 +4039,13 @@ async function toggleUserActive(id, makeActive){
   await logActivity(makeActive?'Enabled user':'Disabled user', id);
   toast('Updated');
 }
+async function toggleUserCanApprove(id, makeCanApprove){
+  if(Session.role!=='admin'){ toast('Only an Admin can do that', true); return; }
+  const u = State.users[id];
+  await db.ref('users/'+id).update({ canApproveBookings: makeCanApprove });
+  await logActivity(makeCanApprove?'Granted booking approval rights':'Removed booking approval rights', u?u.username:id);
+  toast(makeCanApprove?'Can now approve bookings':'Booking approval rights removed');
+}
 async function deleteUserAccount(id, username){
   if(Session.role!=='admin'){ toast('Only an Admin can do that', true); return; }
   const admins = Object.values(State.users||{}).filter(u=>u.role==='admin' && u.isActive!==false);
@@ -4015,7 +4201,12 @@ function renderDashboard(){
   const aedNeedsAttention = !!aedStatus && aedStatus.cls !== 'pill-green';
   const faStatus = sc.firstAidChecksEnabled ? firstAidStatus() : null;
   const faNeedsAttention = !!faStatus && faStatus.cls !== 'pill-green';
-  const needsAttentionCount = overdueMaintenance.filter(m=>m.status.label==='Overdue').length + overdueLoans.length + (aedStatus && aedStatus.cls==='pill-red'?1:0) + (faStatus && faStatus.cls==='pill-red'?1:0);
+  // Groups that HAVE ticked insurance but set an expiry date that's expired or expiring within
+  // 30 days — not groups that simply never claimed insurance, which isn't a "changed" event.
+  const expiringInsuranceGroups = list('groups').filter(g=>g.hasInsurance && g.insuranceExpiryDate).map(g=>({
+    ...g, daysLeft: Math.round((isoToDate(g.insuranceExpiryDate) - isoToDate(today)) / 86400000)
+  })).filter(g=>g.daysLeft<=30).sort((a,b)=>a.daysLeft-b.daysLeft);
+  const needsAttentionCount = overdueMaintenance.filter(m=>m.status.label==='Overdue').length + overdueLoans.length + (aedStatus && aedStatus.cls==='pill-red'?1:0) + (faStatus && faStatus.cls==='pill-red'?1:0) + expiringInsuranceGroups.filter(g=>g.daysLeft<0).length;
 
   document.getElementById('panel-dashboard').innerHTML = `
     <div class="welcome-banner">
@@ -4024,7 +4215,7 @@ function renderDashboard(){
         <div><h2>${escapeHtml((State.config&&State.config.hallName)||'Community Centre')}</h2><p>Welcome back, ${escapeHtml(Session.username)} · ${displayDate(today)} · ${revisionLineHtml()}${(State.config&&State.config.hallEmail)?` · ✉ ${escapeHtml(State.config.hallEmail)}`:''}${(State.config&&State.config.hallEircode)?` · 📍 ${escapeHtml(State.config.hallEircode)}`:''}</p></div>
       </div>
     </div>
-    ${(overdueMaintenance.length || overdueLoans.length || aedNeedsAttention || faNeedsAttention) ? `
+    ${(overdueMaintenance.length || overdueLoans.length || aedNeedsAttention || faNeedsAttention || expiringInsuranceGroups.length) ? `
     <div class="card" style="border-left:4px solid ${needsAttentionCount?'var(--red-500,#dc2626)':'var(--amber-500,#d97706)'};">
       <div class="card-title">⚠ Needs attention${needsAttentionCount?` <span class="pill pill-red">${needsAttentionCount}</span>`:''}</div>
       <div class="table-wrap"><table><thead><tr><th>Item</th><th>What</th><th>Due</th><th>Status</th></tr></thead><tbody>
@@ -4032,6 +4223,7 @@ function renderDashboard(){
         ${faNeedsAttention?`<tr><td>First Aid Kit</td><td>${faStatus.latest?'Check':'No check logged'}</td><td>${faStatus.latest?displayDate(faStatus.latest.date):'—'}</td><td><span class="pill ${faStatus.cls}">${escapeHtml(faStatus.label)}</span></td></tr>`:''}
         ${overdueMaintenance.map(m=>`<tr><td>${escapeHtml(m.name)}</td><td>${m.type==='refill'?'Gas refill':'Service'} due</td><td>${m.status.nextDue?displayDate(m.status.nextDue):'—'}</td><td><span class="pill ${m.status.cls}">${m.status.label}</span></td></tr>`).join('')}
         ${overdueLoans.map(l=>{ const item=get('equipmentItems', l.equipmentItemId); return `<tr><td>${escapeHtml(item?item.name:'Equipment')}</td><td>On loan to ${escapeHtml(l.borrowerName||'—')} (qty ${l.quantity||1})</td><td>${displayDate(l.dueReturnDate)}</td><td><span class="pill pill-red">Overdue return</span></td></tr>`; }).join('')}
+        ${expiringInsuranceGroups.map(g=>`<tr><td>${escapeHtml(g.name)}</td><td>Insurance</td><td>${displayDate(g.insuranceExpiryDate)}</td><td><span class="pill ${g.daysLeft<0?'pill-red':'pill-amber'}">${g.daysLeft<0?'Expired':'Expires soon'}</span></td></tr>`).join('')}
       </tbody></table></div>
     </div>` : ''}
     <div class="grid grid-4">
@@ -4044,7 +4236,7 @@ function renderDashboard(){
       <div class="card">
         <div class="card-title">Upcoming bookings (next 14 days)</div>
         <div class="table-wrap"><table><thead><tr><th>Date</th><th>Room</th><th>Group</th><th>Time</th></tr></thead><tbody>
-          ${upcoming.length? upcoming.slice(0,10).map(b=>`<tr><td>${displayDate(b.occDate)} <span class="muted small">${weekdayName(b.occDate).slice(0,3)}</span></td><td>${b.isWholeComplex?'<span class="pill pill-amber">Whole Complex</span>':escapeHtml(get('rooms',b.roomId)?.name||'—')}</td><td>${escapeHtml(get('groups',b.groupId)?.name||'—')}</td><td>${b.startTime||''}–${b.endTime||''}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="4">No bookings in the next 14 days</td></tr>'}
+          ${upcoming.length? upcoming.slice(0,10).map(b=>{ const t=occurrenceTimesFor(b,b.occDate); return `<tr><td>${displayDate(b.occDate)} <span class="muted small">${weekdayName(b.occDate).slice(0,3)}</span></td><td>${b.isWholeComplex?'<span class="pill pill-amber">Whole Complex</span>':escapeHtml(get('rooms',b.roomId)?.name||'—')}</td><td>${escapeHtml(get('groups',b.groupId)?.name||'—')}</td><td>${t.startTime||''}–${t.endTime||''}</td></tr>`; }).join('') : '<tr class="empty-row"><td colspan="4">No bookings in the next 14 days</td></tr>'}
         </tbody></table></div>
       </div>
       <div class="card">

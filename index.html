@@ -135,7 +135,16 @@
   th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--gray-500);padding:8px 10px;border-bottom:2px solid var(--gray-100);white-space:nowrap;}
   td{padding:9px 10px;border-bottom:1px solid var(--gray-100);vertical-align:middle;}
   tr:last-child td{border-bottom:none;}
-  .table-wrap{overflow-x:auto;}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  @media(max-width:700px){
+    /* Bookings sheet has too many columns for a phone screen to show as a table — turn each
+       row into a stacked card instead, so nothing needs sideways scrolling or pinch-zoom to read. */
+    .bookings-table thead{display:none;}
+    .bookings-table, .bookings-table tbody, .bookings-table tr, .bookings-table td{display:block;width:100%;}
+    .bookings-table tr{border:1px solid var(--gray-300);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--surface);}
+    .bookings-table td{border-bottom:none;padding:5px 0;}
+    .bookings-table td[data-label]:not([data-label=""])::before{content:attr(data-label);display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--gray-500);}
+  }
   .empty-row td{text-align:center;color:var(--gray-500);padding:24px;font-style:italic;}
   .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
   .pill-green{background:var(--green-100);color:var(--green-700);}
@@ -412,7 +421,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 124;
+const APP_REVISION = 125;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -1471,7 +1480,7 @@ function renderBookings(){
         </div>
         <button class="btn btn-primary" onclick="openBookingModal()">+ New Booking</button>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Next date</th><th>Room</th><th>Group</th><th>Event type</th><th>Time</th><th>Recurring</th>${approvalOn?'<th>Status</th>':''}<th>Insurance</th><th>Tasks</th><th>Est. cost</th><th></th></tr></thead><tbody>
+      <div class="table-wrap"><table class="bookings-table"><thead><tr><th>Next date</th><th>Room</th><th>Group</th><th>Event type</th><th>Time</th><th>Recurring</th>${approvalOn?'<th>Status</th>':''}<th>Insurance</th><th>Tasks</th><th>Est. cost</th><th></th></tr></thead><tbody>
         ${rows.length ? rows.map(b=>{
           const taskEntries = b.tasks?Object.values(b.tasks):[];
           const done = taskEntries.filter(t=>t.isCompleted).length;
@@ -1480,17 +1489,17 @@ function renderBookings(){
           const occTimes = b.isRecurring && b.recurrenceType==='Irregular' && b.nextOcc ? occurrenceTimesFor(b, b.nextOcc) : {startTime:b.startTime, endTime:b.endTime};
           const activePause = (b.pausedRanges||[]).find(p=>p.end>=today);
           return `<tr>
-            <td>${b.nextOcc?displayDate(b.nextOcc):'<span class="muted">series ended</span>'}</td>
-            <td>${b.isWholeComplex?'<span class="pill pill-amber">Whole Complex</span>':escapeHtml(get('rooms',b.roomId)?.name||'—')}</td>
-            <td>${escapeHtml(groupForRow?.name||'—')}</td>
-            <td>${escapeHtml(eventTypeName(b.eventTypeId))}</td>
-            <td>${occTimes.startTime||''}–${occTimes.endTime||''}${b.isRecurring && b.recurrenceType==='Irregular'?' <span class="small muted" title="Times can vary by date on an Irregular booking">(varies)</span>':''}</td>
-            <td>${b.isRecurring?`<span class="pill pill-green">${escapeHtml(b.recurrenceType)}</span>`:'<span class="pill pill-gray">One-off</span>'}${activePause?` <span class="pill pill-amber" title="Paused ${displayDate(activePause.start)} – ${displayDate(activePause.end)}${activePause.reason?': '+escapeHtml(activePause.reason):''}">⏸ Paused</span>`:''}</td>
-            ${approvalOn?`<td>${bookingStatusPillHtml(b)}</td>`:''}
-            <td>${bookingInsurancePillHtml(b, groupForRow)}</td>
-            <td>${taskEntries.length? `${done}/${taskEntries.length}` : '<span class="muted">—</span>'}</td>
-            <td>${b.estimatedCost?euro(b.estimatedCost):'<span class="muted small">—</span>'}</td>
-            <td style="white-space:nowrap;">
+            <td data-label="Next date">${b.nextOcc?displayDate(b.nextOcc):'<span class="muted">series ended</span>'}</td>
+            <td data-label="Room">${b.isWholeComplex?'<span class="pill pill-amber">Whole Complex</span>':escapeHtml(get('rooms',b.roomId)?.name||'—')}</td>
+            <td data-label="Group">${escapeHtml(groupForRow?.name||'—')}</td>
+            <td data-label="Event type">${escapeHtml(eventTypeName(b.eventTypeId))}</td>
+            <td data-label="Time">${occTimes.startTime||''}–${occTimes.endTime||''}${b.isRecurring && b.recurrenceType==='Irregular'?' <span class="small muted" title="Times can vary by date on an Irregular booking">(varies)</span>':''}</td>
+            <td data-label="Recurring">${b.isRecurring?`<span class="pill pill-green">${escapeHtml(b.recurrenceType)}</span>`:'<span class="pill pill-gray">One-off</span>'}${activePause?` <span class="pill pill-amber" title="Paused ${displayDate(activePause.start)} – ${displayDate(activePause.end)}${activePause.reason?': '+escapeHtml(activePause.reason):''}">⏸ Paused</span>`:''}</td>
+            ${approvalOn?`<td data-label="Status">${bookingStatusPillHtml(b)}</td>`:''}
+            <td data-label="Insurance">${bookingInsurancePillHtml(b, groupForRow)}</td>
+            <td data-label="Tasks">${taskEntries.length? `${done}/${taskEntries.length}` : '<span class="muted">—</span>'}</td>
+            <td data-label="Est. cost">${b.estimatedCost?euro(b.estimatedCost):'<span class="muted small">—</span>'}</td>
+            <td data-label="" style="white-space:nowrap;">
               ${canApproveThis?`<button class="btn btn-primary btn-sm" title="Approve & confirm" onclick="saveInsuranceOverrideThenApprove('${b.id}')">Approve</button>`:''}
               <button class="icon-btn" title="Edit" onclick="openBookingModal('${b.id}')">✎</button>
               <button class="icon-btn" title="Print booking summary" onclick="printBookingSummary('${b.id}')">🖶</button>

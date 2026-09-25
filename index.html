@@ -7,6 +7,15 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Mullagh Community Centre — Hall Manager</title>
+<!-- Home-screen "app" support: add this file to your phone's home screen and it opens full-screen, its own icon, no browser address bar -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#3f7a30">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hall Manager">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png" type="image/png">
 <style>
   :root{
     --green-900:#1f3d17; --green-700:#356329; --green-600:#3f7a30; --green-500:#4f9439;
@@ -398,7 +407,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 116;
+const APP_REVISION = 118;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -569,7 +578,8 @@ async function undoLastDelete(){
 // 3. STATE & FIREBASE
 // ---------------------------------------------------------------------
 const State = { rooms:{}, eventTypes:{}, taskTemplates:{}, groups:{}, members:{}, bookings:{}, payments:{}, expenses:{}, users:{}, activityLog:{}, config:{}, gallery:{}, rotas:{}, energyReadings:{}, equipmentItems:{}, equipmentLoans:{}, maintenanceItems:{}, presence:{} };
-const Session = { username:null, role:null, uid:null, isGuest:false };
+const Session = { username:null, role:null, uid:null, isGuest:false, canApproveBookings:false };
+function sessionCanApprove(){ return Session.role==='admin' || !!Session.canApproveBookings; }
 let db = null;
 // Tracks whether we're actually talking to a real Firebase project right now (vs local
 // storage, whether by design or because the connection attempt failed) — drives the
@@ -768,7 +778,7 @@ function decideStartScreen(){
       const s = JSON.parse(saved);
       const u = Object.entries(State.users).find(([id,v])=>v.username===s.username);
       if(u && u[1].isActive!==false){
-        Session.username = u[1].username; Session.role = u[1].role; Session.uid = u[0];
+        Session.username = u[1].username; Session.role = u[1].role; Session.uid = u[0]; Session.canApproveBookings = !!u[1].canApproveBookings;
         enterApp();
         return;
       }
@@ -831,7 +841,7 @@ const Auth = {
     if(u.isActive===false) throw new Error('This account has been deactivated.');
     const hash = await sha256Hex(u.salt+password);
     if(hash !== u.passwordHash) throw new Error('Incorrect username or password.');
-    Session.username = u.username; Session.role = u.role; Session.uid = id;
+    Session.username = u.username; Session.role = u.role; Session.uid = id; Session.canApproveBookings = !!u.canApproveBookings;
     localStorage.setItem('mcc_session', JSON.stringify({username: u.username}));
     await logActivity('Logged in');
     enterApp();
@@ -840,7 +850,7 @@ const Auth = {
     if(!Session.isGuest) logActivity('Logged out');
     clearPresence();
     localStorage.removeItem('mcc_session');
-    Session.username=null; Session.role=null; Session.uid=null; Session.isGuest=false;
+    Session.username=null; Session.role=null; Session.uid=null; Session.isGuest=false; Session.canApproveBookings=false;
     decideStartScreen();
   },
   async changePassword(currentPw, newPw){
@@ -1133,6 +1143,66 @@ function resolveTaskAssignee(booking, taskId, occDate){
 }
 
 // ---------------------------------------------------------------------
+// 7a0. BOOKING APPROVAL — optional pending → confirmed workflow, gated on
+// an approver login and the group's (or booking's) insurance status
+// ---------------------------------------------------------------------
+function bookingApprovalEnabled(){ return !!(State.config && State.config.bookingApproval && State.config.bookingApproval.enabled); }
+// Bookings created before this feature existed (or while it was off) have no `status` field —
+// treat those as confirmed so turning this on never retroactively flags old bookings as pending.
+function bookingEffectiveStatus(b){ if(!bookingApprovalEnabled()) return 'confirmed'; return b.status || 'confirmed'; }
+function bookingInsuranceOk(b, group){
+  if(b.insuranceOverride===true) return true;
+  if(b.insuranceOverride===false) return false;
+  return !!(group && group.hasInsurance);
+}
+function bookingStatusPillHtml(b){
+  if(!bookingApprovalEnabled()) return '';
+  const status = bookingEffectiveStatus(b);
+  return status==='confirmed' ? '<span class="pill pill-green">Confirmed</span>' : '<span class="pill pill-red">Pending Approval</span>';
+}
+async function approveBooking(id){
+  if(!sessionCanApprove()){ toast("You're not set up as an approver for bookings — ask an Admin to tick \"Can approve bookings\" on your account in Settings.", true); return; }
+  const b = get('bookings', id);
+  if(!b){ toast('Booking not found', true); return; }
+  const group = get('groups', b.groupId);
+  if(!bookingInsuranceOk(b, group)){
+    toast((group?group.name:'This group')+"'s insurance isn't confirmed — tick it on the Group (Groups & Members), or set an insurance override on this booking, before approving.", true);
+    return;
+  }
+  await db.ref('bookings/'+id).update({ status:'confirmed', approvedBy:Session.username, approvedAt:nowStamp() });
+  await logActivity('Approved booking', bookingLabel(b)+' on '+displayDate(b.bookingDate));
+  toast('Booking confirmed');
+  await fireBookingAutomations({...b, id});
+  openNotifyModal(id);
+}
+// Called from the Booking modal's Approve button — saves whatever insurance override is
+// currently selected in the form first, so a just-changed override doesn't get overridden
+// by the still-old value on the record when the approval check runs.
+async function saveInsuranceOverrideThenApprove(id){
+  const el = document.getElementById('fInsuranceOverride');
+  if(el){
+    const v = el.value;
+    const insuranceOverride = v==='yes' ? true : v==='no' ? false : null;
+    await db.ref('bookings/'+id).update({ insuranceOverride });
+  }
+  await approveBooking(id);
+}
+async function revertBookingToPending(id){
+  if(Session.role!=='admin'){ toast('Only an Admin can revert a confirmed booking back to pending', true); return; }
+  if(!confirm('Revert this booking to Pending Approval?')) return;
+  const b = get('bookings', id);
+  await db.ref('bookings/'+id).update({ status:'pending', approvedBy:null, approvedAt:null });
+  await logActivity('Reverted booking to pending', b?bookingLabel(b):id);
+  toast('Booking set back to pending');
+}
+async function saveBookingApprovalSettings(){
+  const enabled = document.getElementById('cfgBookingApprovalEnabled').checked;
+  await db.ref('config/bookingApproval').set({ enabled });
+  await logActivity('Updated booking approval setting', enabled?'on':'off');
+  toast('Booking approval setting saved');
+}
+
+// ---------------------------------------------------------------------
 // 7a1. NOTIFICATIONS — booking confirmations, hall alerts, rota reminders
 // ---------------------------------------------------------------------
 function notifyConfig(){ return (State.config && State.config.notify) || {}; }
@@ -1305,6 +1375,7 @@ function renderBookings(){
   rows.sort((a,b)=> (a.nextOcc||a.bookingDate).localeCompare(b.nextOcc||b.bookingDate));
 
   const canDelete = Session.role==='admin';
+  const approvalOn = bookingApprovalEnabled();
 
   document.getElementById('panel-bookings').innerHTML = `
     <div class="card">
@@ -1319,10 +1390,11 @@ function renderBookings(){
         </div>
         <button class="btn btn-primary" onclick="openBookingModal()">+ New Booking</button>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Next date</th><th>Room</th><th>Group</th><th>Event type</th><th>Time</th><th>Recurring</th><th>Tasks</th><th>Est. cost</th><th></th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th>Next date</th><th>Room</th><th>Group</th><th>Event type</th><th>Time</th><th>Recurring</th>${approvalOn?'<th>Status</th>':''}<th>Tasks</th><th>Est. cost</th><th></th></tr></thead><tbody>
         ${rows.length ? rows.map(b=>{
           const taskEntries = b.tasks?Object.values(b.tasks):[];
           const done = taskEntries.filter(t=>t.isCompleted).length;
+          const canApproveThis = approvalOn && bookingEffectiveStatus(b)==='pending' && sessionCanApprove();
           return `<tr>
             <td>${b.nextOcc?displayDate(b.nextOcc):'<span class="muted">series ended</span>'}</td>
             <td>${b.isWholeComplex?'<span class="pill pill-amber">Whole Complex</span>':escapeHtml(get('rooms',b.roomId)?.name||'—')}</td>
@@ -1330,9 +1402,11 @@ function renderBookings(){
             <td>${escapeHtml(eventTypeName(b.eventTypeId))}</td>
             <td>${b.startTime||''}–${b.endTime||''}</td>
             <td>${b.isRecurring?`<span class="pill pill-green">${escapeHtml(b.recurrenceType)}</span>`:'<span class="pill pill-gray">One-off</span>'}</td>
+            ${approvalOn?`<td>${bookingStatusPillHtml(b)}</td>`:''}
             <td>${taskEntries.length? `${done}/${taskEntries.length}` : '<span class="muted">—</span>'}</td>
             <td>${b.estimatedCost?euro(b.estimatedCost):'<span class="muted small">—</span>'}</td>
             <td style="white-space:nowrap;">
+              ${canApproveThis?`<button class="btn btn-primary btn-sm" title="Approve & confirm" onclick="saveInsuranceOverrideThenApprove('${b.id}')">Approve</button>`:''}
               <button class="icon-btn" title="Edit" onclick="openBookingModal('${b.id}')">✎</button>
               <button class="icon-btn" title="Print booking summary" onclick="printBookingSummary('${b.id}')">🖶</button>
               <button class="icon-btn" title="Send confirmation / notify" onclick="openNotifyModal('${b.id}')">💬</button>
@@ -1340,7 +1414,7 @@ function renderBookings(){
               ${canDelete?`<button class="icon-btn danger" title="Delete" onclick="deleteBooking('${b.id}')">🗑</button>`:''}
             </td>
           </tr>`;
-        }).join('') : '<tr class="empty-row"><td colspan="9">No bookings match this view</td></tr>'}
+        }).join('') : `<tr class="empty-row"><td colspan="${approvalOn?10:9}">No bookings match this view</td></tr>`}
       </tbody></table></div>
     </div>
     <div class="card">
@@ -1442,7 +1516,37 @@ function openBookingModal(id){
     </div>`;
   }).join('') || '<p class="muted small">No equipment items yet — add chairs, tables, tea making, etc. in the Equipment tab.</p>';
 
+  const approvalOn = bookingApprovalEnabled();
+  const groupForInsurance = b ? get('groups', b.groupId) : null;
+  const bookingStatusSectionHtml = !approvalOn ? '' : `
+    <div style="background:var(--gray-100);border-radius:10px;padding:12px 14px;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div style="font-weight:700;font-size:13px;">Booking status</div>
+        ${b ? bookingStatusPillHtml(b) : '<span class="pill pill-red">Pending Approval</span>'}
+      </div>
+      <div class="small muted" style="margin-top:6px;">
+        ${b
+          ? (bookingInsuranceOk(b, groupForInsurance) ? 'Insurance: confirmed.' : "Insurance: not confirmed — this needs to be sorted (on the Group, or with the override below) before the booking can be approved.")
+          : "New bookings need to be approved before they're confirmed — save this one first, then approve it."}
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>Insurance override for this booking</label>
+        <select id="fInsuranceOverride">
+          <option value="" ${!b || b.insuranceOverride==null ? 'selected':''}>Use group's default</option>
+          <option value="yes" ${b && b.insuranceOverride===true ? 'selected':''}>Confirmed for this booking</option>
+          <option value="no" ${b && b.insuranceOverride===false ? 'selected':''}>Not confirmed for this booking</option>
+        </select>
+        <div class="small muted" style="margin-top:4px;">Only needed if this booking's insurance situation is different from the group's usual setup.</div>
+      </div>
+      ${b ? `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        ${bookingEffectiveStatus(b)==='pending' && sessionCanApprove() ? `<button type="button" class="btn btn-primary btn-sm" onclick="saveInsuranceOverrideThenApprove('${b.id}')">Approve &amp; Confirm</button>` : ''}
+        ${bookingEffectiveStatus(b)==='confirmed' && Session.role==='admin' ? `<button type="button" class="btn btn-secondary btn-sm" onclick="revertBookingToPending('${b.id}')">Revert to Pending</button>` : ''}
+      </div>` : ''}
+    </div>
+  `;
+
   Modal.open(id?'Edit Booking':'New Booking', `
+    ${bookingStatusSectionHtml}
     <div class="field-row">
       <div class="field">
         <label>Room</label>
@@ -1616,14 +1720,23 @@ async function saveBookingForm(id){
     tasks,
     updatedAt: nowStamp(), updatedBy: Session.username
   };
+  const insuranceOverrideEl = document.getElementById('fInsuranceOverride');
+  if(insuranceOverrideEl){
+    const v = insuranceOverrideEl.value;
+    data.insuranceOverride = v==='yes' ? true : v==='no' ? false : null;
+  }
+  const approvalOn = bookingApprovalEnabled();
   try{
     if(id){ await db.ref('bookings/'+id).update(data); await logActivity('Edited booking', bookingLabel(data)+' on '+displayDate(data.bookingDate)); }
     else{
       data.createdAt = nowStamp(); data.createdBy = Session.username;
+      if(approvalOn) data.status = 'pending';
       const newRef = db.ref('bookings').push();
       await newRef.set(data);
       await logActivity('Created booking', bookingLabel(data)+' on '+displayDate(data.bookingDate));
-      fireBookingAutomations({...data, id: newRef.key});
+      // When the approval workflow is on, hold off on confirmation notifications until an
+      // approver actually confirms it (see approveBooking) — a pending booking isn't a yes yet.
+      if(!approvalOn) fireBookingAutomations({...data, id: newRef.key});
     }
     Modal.close(); toast('Booking saved');
   }catch(ex){ toast('Error saving booking: '+ex.message, true); }
@@ -1655,11 +1768,12 @@ function renderGroups(){
     <div class="grid grid-2">
       <div class="card">
         <div class="card-title">Groups &amp; Clubs <button class="btn btn-primary btn-sm" onclick="openGroupModal()">+ Add Group</button></div>
-        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Type</th><th></th></tr></thead><tbody>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Type</th><th>Insurance</th><th></th></tr></thead><tbody>
           ${groups.length?groups.map(g=>`<tr>
             <td>${escapeHtml(g.name)}</td><td>${escapeHtml(g.contactName||'')}</td><td>${escapeHtml(g.contactPhone||'')}</td><td><span class="pill pill-gray">${escapeHtml(g.groupType||'')}</span></td>
+            <td><span class="pill ${g.hasInsurance?'pill-green':'pill-red'}">${g.hasInsurance?'Confirmed':'Not confirmed'}</span></td>
             <td style="white-space:nowrap;"><button class="icon-btn" onclick="openGroupModal('${g.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('groups','${g.id}','group')">🗑</button>`:''}</td>
-          </tr>`).join(''):'<tr class="empty-row"><td colspan="5">No groups yet</td></tr>'}
+          </tr>`).join(''):'<tr class="empty-row"><td colspan="6">No groups yet</td></tr>'}
         </tbody></table></div>
       </div>
       <div class="card">
@@ -1694,13 +1808,14 @@ function openGroupModal(id){
     </div>
     <div class="field"><label>Contact email</label><input type="email" id="gEmail" value="${escapeHtml(g?.contactEmail||'')}"></div>
     <div class="field"><label>Group type</label><input type="text" id="gType" placeholder="e.g. Sports, Community, Farming, Music" value="${escapeHtml(g?.groupType||'')}"></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="gHasInsurance" ${g?.hasInsurance?'checked':''}> Has current public liability insurance of their own</label><div class="small muted" style="margin-top:3px;">Used by the booking approval workflow (Settings → Booking Approval), if you've turned that on — a booking can be blocked from being confirmed until this is ticked.</div></div>
     <div class="field"><label>Notes</label><textarea id="gNotes" rows="2">${escapeHtml(g?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveGroup('${id||''}')">Save</button>`);
 }
 async function saveGroup(id){
   const name = document.getElementById('gName').value.trim();
   if(!name){ toast('Group name required', true); return; }
-  const data = { name, contactName:document.getElementById('gContact').value, contactPhone:document.getElementById('gPhone').value, contactEmail:document.getElementById('gEmail').value, groupType:document.getElementById('gType').value, notes:document.getElementById('gNotes').value };
+  const data = { name, contactName:document.getElementById('gContact').value, contactPhone:document.getElementById('gPhone').value, contactEmail:document.getElementById('gEmail').value, groupType:document.getElementById('gType').value, hasInsurance:document.getElementById('gHasInsurance').checked, notes:document.getElementById('gNotes').value };
   if(id) await db.ref('groups/'+id).update(data); else await db.ref('groups').push(data);
   await logActivity(id?'Edited group':'Added group', name);
   Modal.close(); toast('Group saved');
@@ -3145,6 +3260,23 @@ async function sendContactEmailNow(toEmail){
 // first aid kit checks, and emergency contacts
 // ---------------------------------------------------------------------
 const AedUi = { tab: 'checks' };
+function safetyConfig(){
+  const s = (State.config && State.config.safety) || {};
+  return { aedChecksEnabled: s.aedChecksEnabled !== false, firstAidChecksEnabled: s.firstAidChecksEnabled !== false };
+}
+// Shared by AED Health Checks and First Aid Kit: if the last check has an explicit "next due"
+// date, go by that; otherwise fall back to a rough days-since-last-check assumption.
+function dueDateStatus(latest, fallbackDaysAgo){
+  if(latest.nextDueDate){
+    const daysUntilDue = Math.round((isoToDate(latest.nextDueDate) - isoToDate(todayIso())) / 86400000);
+    if(daysUntilDue < 0) return { label:'Check overdue (was due '+displayDate(latest.nextDueDate)+')', cls:'pill-red' };
+    if(daysUntilDue <= 7) return { label:'Check due soon (due '+displayDate(latest.nextDueDate)+')', cls:'pill-amber' };
+    return { label:'All OK', cls:'pill-green' };
+  }
+  if(fallbackDaysAgo > 30) return { label:'Check overdue ('+fallbackDaysAgo+' days ago)', cls:'pill-red' };
+  if(fallbackDaysAgo > 21) return { label:'Check due soon', cls:'pill-amber' };
+  return { label:'All OK', cls:'pill-green' };
+}
 function aedCurrentStatus(){
   const checks = list('aedChecks').sort((a,b)=> b.date.localeCompare(a.date) || ((b.createdAt||0)-(a.createdAt||0)) );
   const latest = checks[0] || null;
@@ -3155,17 +3287,20 @@ function aedCurrentStatus(){
   if(latest.adultPadsStatus==='expired') problems.push('adult pads expired');
   if(latest.childPadsStatus==='expired') problems.push('child pads expired');
   if(problems.length) return { label:'Needs attention: '+problems.join(', '), cls:'pill-red', latest, daysAgo };
-  if(daysAgo > 30) return { label:'Check overdue ('+daysAgo+' days ago)', cls:'pill-red', latest, daysAgo };
-  if(daysAgo > 21) return { label:'Check due soon', cls:'pill-amber', latest, daysAgo };
-  return { label:'All OK', cls:'pill-green', latest, daysAgo };
+  const due = dueDateStatus(latest, daysAgo);
+  return { label:due.label, cls:due.cls, latest, daysAgo };
 }
 function renderAed(){
+  const sc = safetyConfig();
+  const tabs = [];
+  if(sc.aedChecksEnabled) tabs.push({key:'checks', label:'AED Health Checks'});
+  tabs.push({key:'locations', label:'AED Locations'});
+  if(sc.firstAidChecksEnabled) tabs.push({key:'firstaid', label:'First Aid Kit'});
+  tabs.push({key:'contacts', label:'Emergency Contacts'});
+  if(!tabs.find(t=>t.key===AedUi.tab)) AedUi.tab = tabs[0].key;
   document.getElementById('panel-aed').innerHTML = `
     <div class="chip-filter" style="margin-bottom:16px;">
-      <div class="chip ${AedUi.tab==='checks'?'active':''}" onclick="AedUi.tab='checks';renderAed()">AED Health Checks</div>
-      <div class="chip ${AedUi.tab==='locations'?'active':''}" onclick="AedUi.tab='locations';renderAed()">AED Locations</div>
-      <div class="chip ${AedUi.tab==='firstaid'?'active':''}" onclick="AedUi.tab='firstaid';renderAed()">First Aid Kit</div>
-      <div class="chip ${AedUi.tab==='contacts'?'active':''}" onclick="AedUi.tab='contacts';renderAed()">Emergency Contacts</div>
+      ${tabs.map(t=>`<div class="chip ${AedUi.tab===t.key?'active':''}" onclick="AedUi.tab='${t.key}';renderAed()">${t.label}</div>`).join('')}
     </div>
     ${AedUi.tab==='checks' ? renderAedChecksHtml() : AedUi.tab==='locations' ? renderAedCodesHtml() : AedUi.tab==='firstaid' ? renderFirstAidHtml() : renderEmergencyContactsHtml()}
   `;
@@ -3181,22 +3316,23 @@ function renderAedChecksHtml(){
     <div class="card">
       <div class="card-title">AED Status <span class="pill ${status.cls}">${escapeHtml(status.label)}</span></div>
       ${status.latest
-        ? `<p class="small muted" style="margin-top:-8px;">Last checked ${displayDate(status.latest.date)} (${status.daysAgo} day${status.daysAgo===1?'':'s'} ago)${status.latest.checkedBy?' by '+escapeHtml(status.latest.checkedBy):''}. Checked monthly is recommended — flagged amber after 3 weeks, red after a month or if anything's marked low/expired.</p>`
+        ? `<p class="small muted" style="margin-top:-8px;">Last checked ${displayDate(status.latest.date)} (${status.daysAgo} day${status.daysAgo===1?'':'s'} ago)${status.latest.checkedBy?' by '+escapeHtml(status.latest.checkedBy):''}.${status.latest.nextDueDate?' Next check due '+displayDate(status.latest.nextDueDate)+'.':' No due date set — checked monthly is recommended, so it\'s flagged amber after 3 weeks, red after a month or if anything\'s marked low/expired.'}</p>`
         : `<p class="small muted" style="margin-top:-8px;">No health check has been logged yet — add the first one below.</p>`}
     </div>
     <div class="card">
       <div class="toolbar"><h3 class="section-title" style="margin:0;">Health Check Log</h3><button class="btn btn-primary" onclick="openAedCheckModal()">+ Log a Check</button></div>
-      <p class="section-desc" style="margin-top:-10px;">Record the date every time someone checks the AED — battery, adult pads and child/paediatric pads tracked separately. Shows up on the Dashboard's "Needs attention" card if it's overdue or anything's flagged.</p>
-      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Checked by</th><th>Battery</th><th>Adult Pads</th><th>Child Pads</th><th>Notes</th><th></th></tr></thead><tbody>
+      <p class="section-desc" style="margin-top:-10px;">Record the date every time someone checks the AED — battery, adult pads and child/paediatric pads tracked separately, plus an optional due date for the next check. Shows up on the Dashboard's "Needs attention" card if it's overdue or anything's flagged.</p>
+      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Checked by</th><th>Battery</th><th>Adult Pads</th><th>Child Pads</th><th>Next Due</th><th>Notes</th><th></th></tr></thead><tbody>
         ${checks.length?checks.map(c=>`<tr>
           <td>${displayDate(c.date)}</td>
           <td class="small">${escapeHtml(c.checkedBy||'')}</td>
           <td><span class="pill ${pillFor(c.batteryStatus)}">${battLabel(c.batteryStatus)}</span></td>
           <td><span class="pill ${pillFor(c.adultPadsStatus)}">${padsLabel(c.adultPadsStatus)}</span></td>
           <td><span class="pill ${pillFor(c.childPadsStatus)}">${padsLabel(c.childPadsStatus)}</span></td>
+          <td class="small">${c.nextDueDate?displayDate(c.nextDueDate):'—'}</td>
           <td class="small muted">${escapeHtml(c.notes||'')}</td>
           <td style="white-space:nowrap;"><button class="icon-btn" onclick="openAedCheckModal('${c.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('aedChecks','${c.id}','check')">🗑</button>`:''}</td>
-        </tr>`).join(''):'<tr class="empty-row"><td colspan="7">No checks logged yet</td></tr>'}
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="8">No checks logged yet</td></tr>'}
       </tbody></table></div>
     </div>
   `;
@@ -3225,6 +3361,7 @@ function openAedCheckModal(id){
         <option value="replaced" ${c?.childPadsStatus==='replaced'?'selected':''}>Replaced today</option>
       </select></div>
     </div>
+    <div class="field"><label>Next check due (optional)</label><input type="date" id="aedNextDue" value="${c?.nextDueDate||''}"></div>
     <div class="field"><label>Notes</label><textarea id="aedNotes" rows="2" placeholder="e.g. pads expiry date, anything to flag">${escapeHtml(c?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveAedCheck('${id||''}')">Save</button>`);
 }
@@ -3237,6 +3374,7 @@ async function saveAedCheck(id){
     batteryStatus: document.getElementById('aedBattery').value,
     adultPadsStatus: document.getElementById('aedAdultPads').value,
     childPadsStatus: document.getElementById('aedChildPads').value,
+    nextDueDate: document.getElementById('aedNextDue').value || null,
     notes: document.getElementById('aedNotes').value
   };
   if(id) await db.ref('aedChecks/'+id).update(data);
@@ -3296,9 +3434,8 @@ function firstAidStatus(){
   if(!latest) return { label:'No check logged yet', cls:'pill-red', latest:null, daysAgo:null };
   const daysAgo = Math.round((isoToDate(todayIso()) - isoToDate(latest.date)) / 86400000);
   if(latest.status==='restock') return { label:'Needs restocking', cls:'pill-red', latest, daysAgo };
-  if(daysAgo > 30) return { label:'Check overdue ('+daysAgo+' days ago)', cls:'pill-red', latest, daysAgo };
-  if(daysAgo > 21) return { label:'Check due soon', cls:'pill-amber', latest, daysAgo };
-  return { label:'All OK', cls:'pill-green', latest, daysAgo };
+  const due = dueDateStatus(latest, daysAgo);
+  return { label:due.label, cls:due.cls, latest, daysAgo };
 }
 function renderFirstAidHtml(){
   const canDelete = Session.role==='admin';
@@ -3310,20 +3447,21 @@ function renderFirstAidHtml(){
     <div class="card">
       <div class="card-title">First Aid Kit Status <span class="pill ${status.cls}">${escapeHtml(status.label)}</span></div>
       ${status.latest
-        ? `<p class="small muted" style="margin-top:-8px;">Last checked ${displayDate(status.latest.date)} (${status.daysAgo} day${status.daysAgo===1?'':'s'} ago)${status.latest.checkedBy?' by '+escapeHtml(status.latest.checkedBy):''}.</p>`
+        ? `<p class="small muted" style="margin-top:-8px;">Last checked ${displayDate(status.latest.date)} (${status.daysAgo} day${status.daysAgo===1?'':'s'} ago)${status.latest.checkedBy?' by '+escapeHtml(status.latest.checkedBy):''}.${status.latest.nextDueDate?' Next check due '+displayDate(status.latest.nextDueDate)+'.':''}</p>`
         : `<p class="small muted" style="margin-top:-8px;">No check has been logged yet — add the first one below.</p>`}
     </div>
     <div class="card">
       <div class="toolbar"><h3 class="section-title" style="margin:0;">First Aid Kit Check Log</h3><button class="btn btn-primary" onclick="openFirstAidCheckModal()">+ Log a Check</button></div>
-      <p class="section-desc" style="margin-top:-10px;">Record the date every time someone checks the first aid kit's contents and expiry dates. Shows on the Dashboard if it's overdue or flagged as needing restocking.</p>
-      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Checked by</th><th>Status</th><th>Notes</th><th></th></tr></thead><tbody>
+      <p class="section-desc" style="margin-top:-10px;">Record the date every time someone checks the first aid kit's contents and expiry dates, plus an optional due date for the next check. Shows on the Dashboard if it's overdue or flagged as needing restocking.</p>
+      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Checked by</th><th>Status</th><th>Next Due</th><th>Notes</th><th></th></tr></thead><tbody>
         ${checks.length?checks.map(c=>`<tr>
           <td>${displayDate(c.date)}</td>
           <td class="small">${escapeHtml(c.checkedBy||'')}</td>
           <td><span class="pill ${pillFor(c.status)}">${statusLabel(c.status)}</span></td>
+          <td class="small">${c.nextDueDate?displayDate(c.nextDueDate):'—'}</td>
           <td class="small muted">${escapeHtml(c.notes||'')}</td>
           <td style="white-space:nowrap;"><button class="icon-btn" onclick="openFirstAidCheckModal('${c.id}')">✎</button>${canDelete?`<button class="icon-btn danger" onclick="deleteRecord('firstAidChecks','${c.id}','check')">🗑</button>`:''}</td>
-        </tr>`).join(''):'<tr class="empty-row"><td colspan="5">No checks logged yet</td></tr>'}
+        </tr>`).join(''):'<tr class="empty-row"><td colspan="6">No checks logged yet</td></tr>'}
       </tbody></table></div>
     </div>
   `;
@@ -3339,6 +3477,7 @@ function openFirstAidCheckModal(id){
       <option value="ok" ${c?.status!=='restock'?'selected':''}>OK</option>
       <option value="restock" ${c?.status==='restock'?'selected':''}>Needs restocking</option>
     </select></div>
+    <div class="field"><label>Next check due (optional)</label><input type="date" id="faNextDue" value="${c?.nextDueDate||''}"></div>
     <div class="field"><label>Notes</label><textarea id="faNotes" rows="2" placeholder="e.g. plasters running low, replaced burn dressing">${escapeHtml(c?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveFirstAidCheck('${id||''}')">Save</button>`);
 }
@@ -3349,6 +3488,7 @@ async function saveFirstAidCheck(id){
     date,
     checkedBy: document.getElementById('faCheckedBy').value.trim(),
     status: document.getElementById('faStatus').value,
+    nextDueDate: document.getElementById('faNextDue').value || null,
     notes: document.getElementById('faNotes').value
   };
   if(id) await db.ref('firstAidChecks/'+id).update(data);
@@ -3522,7 +3662,7 @@ function renderSettings(){
         ${users.length?users.map(u=>{
           const isSelf = u.id===Session.uid;
           return `<tr>
-            <td>${escapeHtml(u.username)}</td><td><span class="pill ${u.role==='admin'?'pill-amber':'pill-gray'}">${escapeHtml(u.role)}</span></td>
+            <td>${escapeHtml(u.username)}</td><td><span class="pill ${u.role==='admin'?'pill-amber':'pill-gray'}">${escapeHtml(u.role)}</span>${u.canApproveBookings?' <span class="pill pill-green" title="Can approve bookings">Approver</span>':''}</td>
             <td>${u.isActive===false?'<span class="pill pill-red">Disabled</span>':'<span class="pill pill-green">Active</span>'}</td>
             <td class="small muted">${u.createdAt?displayDate(u.createdAt.slice(0,10)):''}</td>
             <td style="white-space:nowrap;">
@@ -3534,6 +3674,19 @@ function renderSettings(){
           </tr>`;
         }).join(''):'<tr class="empty-row"><td colspan="5">No users</td></tr>'}
       </tbody></table></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Safety Tracking</div>
+      <p class="small muted" style="margin-top:-8px;">Turn off anything you don't need to track — it just hides that sub-tab in AED &amp; Safety and stops it appearing on the Dashboard's "Needs attention" card. Nothing already logged is deleted, so switching it back on brings the history straight back.</p>
+      <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cfgAedChecksEnabled" ${safetyConfig().aedChecksEnabled?'checked':''}> Track AED health checks</label></div>
+      <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cfgFirstAidChecksEnabled" ${safetyConfig().firstAidChecksEnabled?'checked':''}> Track First Aid Kit checks</label></div>
+      <button class="btn btn-primary" onclick="saveSafetySettings()">Save Safety Settings</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Booking Approval</div>
+      <p class="small muted" style="margin-top:-8px;">When turned on, new bookings are logged as "Pending Approval" (shown in red) until someone with the "Can approve bookings" tick (set per-user above) confirms them — it then turns green and, if approving triggers your automatic booking confirmation, that message goes out at that point. Approval is blocked until the group's insurance is confirmed (or an override is set on that individual booking). Admins can always approve, and can revert a confirmed booking back to pending. Leave this off and bookings work exactly as before — confirmed straight away.</p>
+      <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cfgBookingApprovalEnabled" ${bookingApprovalEnabled()?'checked':''}> Require approval before a booking is confirmed</label></div>
+      <button class="btn btn-primary" onclick="saveBookingApprovalSettings()">Save Booking Approval Setting</button>
     </div>
     <div class="card">
       <div class="card-title">Notifications</div>
@@ -3566,6 +3719,13 @@ function renderSettings(){
     </div>
     ` : ''}
   `;
+}
+async function saveSafetySettings(){
+  const aedChecksEnabled = document.getElementById('cfgAedChecksEnabled').checked;
+  const firstAidChecksEnabled = document.getElementById('cfgFirstAidChecksEnabled').checked;
+  await db.ref('config/safety').set({ aedChecksEnabled, firstAidChecksEnabled });
+  await logActivity('Updated safety tracking settings', 'AED: '+(aedChecksEnabled?'on':'off')+', First Aid Kit: '+(firstAidChecksEnabled?'on':'off'));
+  toast('Safety settings saved');
 }
 async function saveNotifySettings(){
   const notify = {
@@ -3613,12 +3773,14 @@ function openUserModal(){
     <div class="field"><label>Password</label><input type="password" id="uPassword" minlength="4"></div>
     <div class="field"><label>Role</label><select id="uRole" onchange="document.getElementById('uAdminKeyField').style.display=(this.value==='admin' && ${requireKey})?'block':'none'"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
     <div class="field" id="uAdminKeyField" style="display:none;"><label>Admin promotion key</label><input type="password" id="uAdminKey"></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="uCanApprove"> Can approve bookings</label><div class="small muted" style="margin-top:3px;">Admins can always approve bookings regardless of this. Tick it for a Staff login you want to also be able to confirm bookings.</div></div>
   `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveNewUser()">Create User</button>`);
 }
 async function saveNewUser(){
   const username = document.getElementById('uUsername').value.trim();
   const password = document.getElementById('uPassword').value;
   const role = document.getElementById('uRole').value;
+  const canApproveBookings = document.getElementById('uCanApprove').checked;
   if(!username || !password || password.length<4){ toast('Enter a username and a password (4+ chars)', true); return; }
   if(Object.values(State.users||{}).some(u=>u.username.toLowerCase()===username.toLowerCase())){ toast('That username already exists', true); return; }
   if(role==='admin' && State.config.requireAdminPromotionKey!==false){
@@ -3627,7 +3789,7 @@ async function saveNewUser(){
   }
   const salt = randomSalt();
   const passwordHash = await sha256Hex(salt+password);
-  await db.ref('users').push({ username, salt, passwordHash, role, isActive:true, createdAt: nowStamp() });
+  await db.ref('users').push({ username, salt, passwordHash, role, canApproveBookings, isActive:true, createdAt: nowStamp() });
   await logActivity('Created user', username+' ('+role+')');
   Modal.close(); toast('User created');
 }
@@ -3643,6 +3805,7 @@ function openEditUserModal(id){
       <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
     </select></div>
     <div class="field" id="euAdminKeyField" style="display:none;"><label>Admin promotion key</label><input type="password" id="euAdminKey"></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="euCanApprove" ${u.canApproveBookings?'checked':''}> Can approve bookings</label><div class="small muted" style="margin-top:3px;">Admins can always approve bookings regardless of this. Tick it for a Staff login you want to also be able to confirm bookings.</div></div>
     <p class="small muted" style="margin-top:-6px;">To change this user's password, use "Reset Password" on the Users list instead.</p>
   `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveEditUser('${id}')">Save Changes</button>`);
 }
@@ -3652,6 +3815,7 @@ async function saveEditUser(id){
   if(!target){ toast('User not found', true); return; }
   const username = document.getElementById('euUsername').value.trim();
   const role = document.getElementById('euRole').value;
+  const canApproveBookings = document.getElementById('euCanApprove').checked;
   if(!username){ toast('Enter a username', true); return; }
   if(list('users').some(u=>u.id!==id && u.username.toLowerCase()===username.toLowerCase())){ toast('That username already exists', true); return; }
   if(target.role==='admin' && role!=='admin'){
@@ -3663,7 +3827,7 @@ async function saveEditUser(id){
     const key = document.getElementById('euAdminKey').value;
     if(key !== ADMIN_PROMOTION_KEY){ toast('Admin promotion key is incorrect', true); return; }
   }
-  await db.ref('users/'+id).update({ username, role });
+  await db.ref('users/'+id).update({ username, role, canApproveBookings });
   await logActivity('Edited user', target.username + (target.username!==username?' → '+username:'') + ' ('+role+')');
   Modal.close(); toast('User updated');
 }
@@ -3846,11 +4010,12 @@ function renderDashboard(){
 
   const overdueMaintenance = list('maintenanceItems').map(m=>({...m, status:maintenanceStatus(m)})).filter(m=>m.status.label==='Overdue' || m.status.label==='Due soon').sort((a,b)=>(a.status.nextDue||'').localeCompare(b.status.nextDue||''));
   const overdueLoans = list('equipmentLoans').filter(l=>!l.returnedDate && l.dueReturnDate && l.dueReturnDate<today).sort((a,b)=>(a.dueReturnDate||'').localeCompare(b.dueReturnDate||''));
-  const aedStatus = aedCurrentStatus();
-  const aedNeedsAttention = aedStatus.cls !== 'pill-green';
-  const faStatus = firstAidStatus();
-  const faNeedsAttention = faStatus.cls !== 'pill-green';
-  const needsAttentionCount = overdueMaintenance.filter(m=>m.status.label==='Overdue').length + overdueLoans.length + (aedStatus.cls==='pill-red'?1:0) + (faStatus.cls==='pill-red'?1:0);
+  const sc = safetyConfig();
+  const aedStatus = sc.aedChecksEnabled ? aedCurrentStatus() : null;
+  const aedNeedsAttention = !!aedStatus && aedStatus.cls !== 'pill-green';
+  const faStatus = sc.firstAidChecksEnabled ? firstAidStatus() : null;
+  const faNeedsAttention = !!faStatus && faStatus.cls !== 'pill-green';
+  const needsAttentionCount = overdueMaintenance.filter(m=>m.status.label==='Overdue').length + overdueLoans.length + (aedStatus && aedStatus.cls==='pill-red'?1:0) + (faStatus && faStatus.cls==='pill-red'?1:0);
 
   document.getElementById('panel-dashboard').innerHTML = `
     <div class="welcome-banner">

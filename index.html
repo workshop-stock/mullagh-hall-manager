@@ -412,7 +412,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 123;
+const APP_REVISION = 124;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -3504,7 +3504,7 @@ function renderVolunteerGroupsHtml(){
         <div class="toolbar">
           <div>
             <div class="card-title" style="margin-bottom:2px;">${escapeHtml(g.name)}</div>
-            <div class="small muted">${coordinator?'Coordinator: '+escapeHtml(coordinator.name):'No coordinator set'}</div>
+            <div style="font-size:14px;font-weight:600;color:var(--gray-700);">${coordinator?'Coordinator: '+escapeHtml(coordinator.name):'No coordinator set'}</div>
           </div>
           <div style="white-space:nowrap;">
             <button class="btn btn-secondary btn-sm" onclick="openVolunteerModal(null,'${g.id}')">+ Add Volunteer</button>

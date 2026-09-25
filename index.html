@@ -412,7 +412,7 @@ const ADMIN_PROMOTION_KEY = "MULLAGH-ADMIN-2026";
 
 // Bumped by 1 on every revision delivered from here on (started at 101) — shown on the
 // Dashboard so it's obvious at a glance which build is running, same as the workshop app.
-const APP_REVISION = 120;
+const APP_REVISION = 121;
 
 // ---------------------------------------------------------------------
 // 1b. BRAND ASSETS — baked-in logo + photo strip (see SETUP-INSTRUCTIONS.md to swap)
@@ -1196,12 +1196,16 @@ function bookingEffectiveStatus(b){ if(!bookingApprovalEnabled()) return 'confir
 // Insurance is only "confirmed" if it's ticked on the Group AND, if an expiry date is set,
 // that date hasn't passed yet — so cover lapsing quietly no longer slips through unnoticed.
 function groupInsuranceEffectiveOk(group){
-  if(!group || !group.hasInsurance) return false;
+  if(!group) return false;
+  if(group.insuranceExempt) return true;
+  if(!group.hasInsurance) return false;
   if(group.insuranceExpiryDate && isoToDate(group.insuranceExpiryDate) < isoToDate(todayIso())) return false;
   return true;
 }
 function groupInsuranceStatusPill(group){
-  if(!group || !group.hasInsurance) return '<span class="pill pill-red">Not confirmed</span>';
+  if(!group) return '<span class="pill pill-red">Not confirmed</span>';
+  if(group.insuranceExempt) return '<span class="pill pill-gray" title="Covered under another policy, not their own">Exempt'+(group.insuranceExemptNote?' ('+escapeHtml(group.insuranceExemptNote)+')':'')+'</span>';
+  if(!group.hasInsurance) return '<span class="pill pill-red">Not confirmed</span>';
   if(group.insuranceExpiryDate){
     const daysLeft = Math.round((isoToDate(group.insuranceExpiryDate) - isoToDate(todayIso())) / 86400000);
     if(daysLeft < 0) return '<span class="pill pill-red">Expired '+displayDate(group.insuranceExpiryDate)+'</span>';
@@ -1597,7 +1601,7 @@ function openBookingModal(id){
     <div style="background:var(--gray-100);border-radius:10px;padding:12px 14px;margin-bottom:14px;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
         <div style="font-weight:700;font-size:13px;">Insurance</div>
-        ${b ? bookingInsurancePillHtml(b, groupForInsurance) : (groupForInsurance ? groupInsuranceStatusPill(groupForInsurance) : '<span class="small muted">Pick a group above</span>')}
+        <span id="bookingInsuranceLine">${b ? bookingInsurancePillHtml(b, groupForInsurance) : (groupForInsurance ? groupInsuranceStatusPill(groupForInsurance) : '<span class="small muted">Pick a group above</span>')}</span>
       </div>
       ${approvalOn ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;">
         <div style="font-weight:700;font-size:13px;">Booking status</div>
@@ -1610,7 +1614,7 @@ function openBookingModal(id){
       </div>` : ''}
       <div class="field" style="margin-top:8px;">
         <label>Insurance override for this booking</label>
-        <select id="fInsuranceOverride">
+        <select id="fInsuranceOverride" onchange="refreshBookingInsuranceLine()">
           <option value="" ${!b || b.insuranceOverride==null ? 'selected':''}>Use group's default</option>
           <option value="yes" ${b && b.insuranceOverride===true ? 'selected':''}>Confirmed for this booking</option>
           <option value="no" ${b && b.insuranceOverride===false ? 'selected':''}>Not confirmed for this booking</option>
@@ -1961,19 +1965,48 @@ function openGroupModal(id){
     </div>
     <div class="field"><label>Contact email</label><input type="email" id="gEmail" value="${escapeHtml(g?.contactEmail||'')}"></div>
     <div class="field"><label>Group type</label><input type="text" id="gType" placeholder="e.g. Sports, Community, Farming, Music" value="${escapeHtml(g?.groupType||'')}"></div>
-    <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="gHasInsurance" ${g?.hasInsurance?'checked':''}> Has current public liability insurance of their own</label><div class="small muted" style="margin-top:3px;">Used by the booking approval workflow (Settings → Booking Approval), if you've turned that on — a booking can be blocked from being confirmed until this is ticked (and, below, not expired).</div></div>
-    <div class="field-row">
-      <div class="field"><label>Insurance details (provider / policy no.)</label><input type="text" id="gInsuranceProvider" placeholder="e.g. Aviva, policy AB12345" value="${escapeHtml(g?.insuranceProvider||'')}"></div>
-      <div class="field"><label>Insurance expiry date</label><input type="date" id="gInsuranceExpiry" value="${g?.insuranceExpiryDate||''}"></div>
+    ${sessionCanApprove() ? `
+    <div class="field" style="background:var(--gray-100);border-radius:8px;padding:10px 12px;">
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="gInsuranceExempt" onchange="handleGroupInsuranceExemptChange()" ${g?.insuranceExempt?'checked':''}> Exempt — already covered under another policy</label>
+      <div class="small muted" style="margin-top:3px;">For a group that doesn't hold its own policy but is covered another way — e.g. Mullagh GAA, Camogie, and the playground all under the GAA/Community Centre's own insurance. An exempt group always counts as insured for the booking approval workflow, with no expiry date to track.</div>
+      <div class="field" id="gInsuranceExemptNoteWrap" style="margin-top:8px;display:${g?.insuranceExempt?'block':'none'};">
+        <label>Covered under</label><input type="text" id="gInsuranceExemptNote" placeholder="e.g. Mullagh GAA / Community Centre insurance" value="${escapeHtml(g?.insuranceExemptNote||'')}">
+      </div>
     </div>
-    <div class="small muted" style="margin-top:-8px;margin-bottom:12px;">Optional — leave the expiry date blank if you don't want to track it. If it's set and the date passes, this group's insurance stops counting as confirmed for the booking approval workflow until the date's updated, even if the tickbox above is still ticked.</div>
+    ` : `
+    <div class="field" style="background:var(--gray-100);border-radius:8px;padding:10px 12px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:4px;">Insurance exemption</div>
+      ${g && g.insuranceExempt ? groupInsuranceStatusPill(g) : '<span class="pill pill-gray">Not exempt</span>'}
+      <div class="small muted" style="margin-top:4px;">Only a booking approver or Admin can set a group as exempt.</div>
+    </div>
+    `}
+    <div id="gInsuranceDetailWrap" style="display:${g?.insuranceExempt?'none':'block'};">
+      <div class="field"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="gHasInsurance" ${g?.hasInsurance?'checked':''}> Has current public liability insurance of their own</label><div class="small muted" style="margin-top:3px;">Used by the booking approval workflow (Settings → Booking Approval), if you've turned that on — a booking can be blocked from being confirmed until this is ticked (and, below, not expired).</div></div>
+      <div class="field-row">
+        <div class="field"><label>Insurance details (provider / policy no.)</label><input type="text" id="gInsuranceProvider" placeholder="e.g. Aviva, policy AB12345" value="${escapeHtml(g?.insuranceProvider||'')}"></div>
+        <div class="field"><label>Insurance expiry date</label><input type="date" id="gInsuranceExpiry" value="${g?.insuranceExpiryDate||''}"></div>
+      </div>
+      <div class="small muted" style="margin-top:-8px;margin-bottom:12px;">Optional — leave the expiry date blank if you don't want to track it. If it's set and the date passes, this group's insurance stops counting as confirmed for the booking approval workflow until the date's updated, even if the tickbox above is still ticked.</div>
+    </div>
     <div class="field"><label>Notes</label><textarea id="gNotes" rows="2">${escapeHtml(g?.notes||'')}</textarea></div>
   `,`<button class="btn btn-secondary" onclick="Modal.requestClose()">Cancel</button><button class="btn btn-primary" onclick="saveGroup('${id||''}')">Save</button>`);
+}
+// Toggling exempt just shows/hides the two field groups (nothing is added/removed from the DOM),
+// so this can't trip up Modal.isDirty()'s element-count check.
+function handleGroupInsuranceExemptChange(){
+  const exempt = document.getElementById('gInsuranceExempt').checked;
+  document.getElementById('gInsuranceExemptNoteWrap').style.display = exempt ? 'block' : 'none';
+  document.getElementById('gInsuranceDetailWrap').style.display = exempt ? 'none' : 'block';
 }
 async function saveGroup(id){
   const name = document.getElementById('gName').value.trim();
   if(!name){ toast('Group name required', true); return; }
-  const data = { name, contactName:document.getElementById('gContact').value, contactPhone:document.getElementById('gPhone').value, contactEmail:document.getElementById('gEmail').value, groupType:document.getElementById('gType').value, hasInsurance:document.getElementById('gHasInsurance').checked, insuranceProvider:document.getElementById('gInsuranceProvider').value, insuranceExpiryDate:document.getElementById('gInsuranceExpiry').value||null, notes:document.getElementById('gNotes').value };
+  // Only a booking approver/Admin sees the exempt checkbox at all (openGroupModal) — for
+  // anyone else it's just not in the form, so keep whatever the group already had.
+  const existing = id ? get('groups', id) : null;
+  const exemptEl = document.getElementById('gInsuranceExempt');
+  const exemptNoteEl = document.getElementById('gInsuranceExemptNote');
+  const data = { name, contactName:document.getElementById('gContact').value, contactPhone:document.getElementById('gPhone').value, contactEmail:document.getElementById('gEmail').value, groupType:document.getElementById('gType').value, insuranceExempt:exemptEl?exemptEl.checked:!!(existing&&existing.insuranceExempt), insuranceExemptNote:exemptNoteEl?exemptNoteEl.value:(existing?(existing.insuranceExemptNote||''):''), hasInsurance:document.getElementById('gHasInsurance').checked, insuranceProvider:document.getElementById('gInsuranceProvider').value, insuranceExpiryDate:document.getElementById('gInsuranceExpiry').value||null, notes:document.getElementById('gNotes').value };
   if(id) await db.ref('groups/'+id).update(data); else await db.ref('groups').push(data);
   await logActivity(id?'Edited group':'Added group', name);
   Modal.close(); toast('Group saved');
@@ -1983,17 +2016,34 @@ async function saveGroup(id){
 // Booking form and losing everything else already filled in — a plain prompt() rather than
 // a nested Modal, since Modal.open() would wipe the booking form underneath it.
 async function handleGroupSelectChange(selectEl){
-  if(selectEl.value !== '__new__') return;
-  const name = (prompt('New group / club name:')||'').trim();
-  if(!name){ selectEl.value=''; return; }
-  const ref = db.ref('groups').push();
-  await ref.set({ name, createdAt: nowStamp() });
-  await logActivity('Added group', name);
-  const opt = document.createElement('option');
-  opt.value = ref.key; opt.textContent = name;
-  selectEl.insertBefore(opt, selectEl.querySelector('option[value="__new__"]'));
-  selectEl.value = ref.key;
-  toast('Group added — add contact details later from Groups & Members if you like');
+  if(selectEl.value === '__new__'){
+    const name = (prompt('New group / club name:')||'').trim();
+    if(!name){ selectEl.value=''; refreshBookingInsuranceLine(); return; }
+    const ref = db.ref('groups').push();
+    await ref.set({ name, createdAt: nowStamp() });
+    await logActivity('Added group', name);
+    const opt = document.createElement('option');
+    opt.value = ref.key; opt.textContent = name;
+    selectEl.insertBefore(opt, selectEl.querySelector('option[value="__new__"]'));
+    selectEl.value = ref.key;
+    toast('Group added — add contact details later from Groups & Members if you like');
+  }
+  refreshBookingInsuranceLine();
+}
+// Keeps the Insurance pill at the top of the booking form in sync with whichever group is
+// currently picked (and whichever override is currently selected) — mainly for a brand-new
+// booking, where there's no saved record yet for the static render to read a status from.
+function refreshBookingInsuranceLine(){
+  const row = document.getElementById('bookingInsuranceLine');
+  if(!row) return;
+  const groupSel = document.getElementById('fGroup');
+  const group = groupSel && groupSel.value && groupSel.value!=='__new__' ? get('groups', groupSel.value) : null;
+  const overrideSel = document.getElementById('fInsuranceOverride');
+  const overrideVal = overrideSel ? overrideSel.value : '';
+  if(!group){ row.innerHTML = '<span class="small muted">Pick a group above</span>'; return; }
+  if(overrideVal==='yes'){ row.innerHTML = '<span class="pill pill-green" title="Insurance override set on this booking">Confirmed (override)</span>'; return; }
+  if(overrideVal==='no'){ row.innerHTML = '<span class="pill pill-red" title="Insurance override set on this booking">Not confirmed (override)</span>'; return; }
+  row.innerHTML = groupInsuranceStatusPill(group);
 }
 // Same idea as the group quick-add above, so a booking for a brand-new event type doesn't mean
 // abandoning this form, going to Setup, adding it there, then coming back and starting over.
@@ -4203,7 +4253,7 @@ function renderDashboard(){
   const faNeedsAttention = !!faStatus && faStatus.cls !== 'pill-green';
   // Groups that HAVE ticked insurance but set an expiry date that's expired or expiring within
   // 30 days — not groups that simply never claimed insurance, which isn't a "changed" event.
-  const expiringInsuranceGroups = list('groups').filter(g=>g.hasInsurance && g.insuranceExpiryDate).map(g=>({
+  const expiringInsuranceGroups = list('groups').filter(g=>!g.insuranceExempt && g.hasInsurance && g.insuranceExpiryDate).map(g=>({
     ...g, daysLeft: Math.round((isoToDate(g.insuranceExpiryDate) - isoToDate(today)) / 86400000)
   })).filter(g=>g.daysLeft<=30).sort((a,b)=>a.daysLeft-b.daysLeft);
   const needsAttentionCount = overdueMaintenance.filter(m=>m.status.label==='Overdue').length + overdueLoans.length + (aedStatus && aedStatus.cls==='pill-red'?1:0) + (faStatus && faStatus.cls==='pill-red'?1:0) + expiringInsuranceGroups.filter(g=>g.daysLeft<0).length;
